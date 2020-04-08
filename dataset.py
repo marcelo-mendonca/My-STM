@@ -78,13 +78,17 @@ class DAVIS_MO_Train(data.Dataset):
         for idx, f in enumerate(train_triplet):
             #print('index: {}, triplet: {}, name: {}'.format(index, train_triplet, video))
             img_file = os.path.join(self.image_dir, video, '{:05d}.jpg'.format(f))
-            N_frames[idx] = np.array(Image.open(img_file).convert('RGB'))/255.
+            N_frames[idx], coord = self.crop_frames(np.array(Image.open(img_file).convert('RGB'))/255.)
+            #sem crop: N_frames[idx]:  (480, 854, 3)
+            #com crop: N_frames[idx]:  (384, 384, 3)
             try:
                 mask_file = os.path.join(self.mask_dir, video, '{:05d}.png'.format(f))  
-                N_masks[idx] = np.array(Image.open(mask_file).convert('P'), dtype=np.uint8)
+                N_masks[idx], coord = self.crop_frames(np.array(Image.open(mask_file).convert('P'), dtype=np.uint8), coord)
             except:
                 # print('a')
                 N_masks[idx] = 255
+            #sem crop: N_masks[idx]:  (480, 854)
+            #com crop: N_masks[idx]:  (384, 384)
         
         Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
         #Fs:  torch.Size([3, 3, 480, 854]) -> canais, frames, linhas, colunas
@@ -108,6 +112,32 @@ class DAVIS_MO_Train(data.Dataset):
     
     def __len__(self):
         return len(self.train_triplets)    
+    
+    def crop_frames(self, img, coord=None):
+        
+        fix_w, fix_h = self.fixed_size
+        
+        if coord:
+            new_w, new_h = coord
+            if len(img.shape) == 3:
+                new_img = img[new_w:new_w+fix_w, new_h:new_h+fix_h,:]
+            else:
+                new_img = img[new_w:new_w+fix_w, new_h:new_h+fix_h]
+        else:
+            if len(img.shape) == 3:
+                w, h, _ = img.shape
+                new_w = random.randrange(0, w - fix_w)
+                new_h = random.randrange(0, h - fix_h)
+                new_img = img[new_w:new_w+fix_w, new_h:new_h+fix_h,:]
+            else:
+                w, h = img.shape
+                new_w = random.randrange(0, w - fix_w)
+                new_h = random.randrange(0, h - fix_h)
+                new_img = img[new_w:new_w+fix_w, new_h:new_h+fix_h]
+        
+        coord = (new_w, new_h)
+        
+        return new_img, coord
     
     def Skip_frames(self, frame, num_frames):
         

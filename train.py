@@ -160,7 +160,7 @@ def run_train(device):
             seq_name = info['name'][0]
             num_frames = info['num_frames'][0].item()
                     
-                    
+            
             optimizer.zero_grad()
             
             tt = time.time()
