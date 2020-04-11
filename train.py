@@ -23,7 +23,7 @@ from helpers import *
 
 # Constants
 MODEL_DIR = 'saved_models'
-NUM_EPOCHS = 1
+NUM_EPOCHS = 1000
 
 
 def main():
@@ -88,7 +88,7 @@ def run_train(device):
     # data loader
     Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     #Trainset = DAVIS(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), multi_object=(YEAR==17))
-    Trainloader = data.DataLoader(Trainset, batch_size=4, shuffle=True, num_workers=2)
+    Trainloader = data.DataLoader(Trainset, batch_size=1, shuffle=True, num_workers=1)
     
     Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=2)
@@ -163,15 +163,10 @@ def run_train(device):
             seq_name = info['name'][0]
             num_frames = info['num_frames'][0].item()
             
-            print("#Fs: ", Fs.shape)
-            print("#Ms: ", Ms.shape)
-            print("#num_objects: ", num_objects.shape)
-            input('Press Enter button to continue...')
             ############################
             #ATENÇÃO: deu ruim qd coloca batch > 1 por causa de num_objects
             #tem q ver como resolver, especialmente em model -> Pad_mem que
-            #tá dando erro nessa merda...
-                    
+            #tá dando erro nessa merda...                    
             
             optimizer.zero_grad()
             
@@ -183,6 +178,9 @@ def run_train(device):
             #Fs:  torch.Size([1, 3, 3, 480, 854])
             #Ms:  torch.Size([1, 11, 3, 480, 854])
             #Es:  torch.Size([1, 11, 3, 480, 854])
+            #Fs:  torch.Size([1, 3, 3, 384, 384])
+            #Ms:  torch.Size([1, 11, 3, 384, 384])
+            #num_objects:  torch.Size([1, 1])
             
             loss = 0
             
@@ -190,7 +188,7 @@ def run_train(device):
             for t in range(1,3):
                 
                 # memorize torch.tensor([num_objects])
-                prev_key, prev_value = model(Fs[:,:,t-1], Es[:,:,t-1], num_objects)
+                prev_key, prev_value = model(Fs[:,:,t-1], Es[:,:,t-1], torch.tensor([num_objects]))
                 #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 54])
                 #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 54])  
                 
@@ -204,7 +202,7 @@ def run_train(device):
                 #this_values:  torch.Size([1, 11, 512, 1, 30, 54])
                 
                 # segment
-                logit = model(Fs[:,:,t], this_keys, this_values, num_objects)
+                logit = model(Fs[:,:,t], this_keys, this_values, torch.tensor([num_objects]))
                 #(t=39) logit: torch.Size([1, 11, 480, 910])
                 
                 
@@ -215,13 +213,12 @@ def run_train(device):
                 
                 # update
                 keys, values = this_keys, this_values
-                #print('########### t: ', t)
-                #input('Press Enter button to continue...')
+                print('########### t: ', t)
+                input('Press Enter button to continue...')
                 
             ##########################
             # parei aqui, nao sei onde deve ficar a loss... =(
-            loss = loss + criterion(Es[:,:,1:2], Ms[:,:,1:2].float())
-              
+            loss = loss + criterion(Es[:,:,1:2], Ms[:,:,1:2].float())              
                 
             if loss > 0:  
                 optimizer.zero_grad()
@@ -239,11 +236,13 @@ def run_train(device):
             ("Fim do loop: {}/{} ".format(seq,iters_per_epoch))
             #input('Press Enter button to continue...')
             
-           
-            
-        
-    
-    
+        if epoch % 10 == 0: # and epoch > 0:
+            save_name = '{}/{}.pth'.format(MODEL_DIR, epoch)
+            torch.save({'epoch': epoch,
+                        'model': model.state_dict(), 
+                        'optimizer': optimizer.state_dict(),
+                       },
+                       save_name)   
     
     
         

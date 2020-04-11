@@ -237,8 +237,7 @@ class STM(nn.Module):
         
         # memorize a frame 
         num_objects = num_objects[0].item()
-        print("aquiiiiiiii: ", num_objects)
-        input('Press Enter button to continue...')
+
         _, K, H, W = masks.shape # B = 1
         #num_objects item:  2
         # K=11, H=480, W=912
@@ -254,17 +253,18 @@ class STM(nn.Module):
         B_list = {'f':[], 'm':[], 'o':[]}
         for o in range(1, num_objects+1): # 1 - no
             B_list['f'].append(frame)
-            B_list['m'].append(masks[:,o])
-            B_list['o'].append((torch.sum(masks[:,0:o], dim=1) + \
-                torch.sum(masks[:,o:num_objects+1], dim=1)).clamp(0,1))
+            B_list['m'].append(masks[:,o])            
+            B_list['o'].append((torch.sum(masks[:,1:num_objects+1], dim=1).clamp(0,1)))
+            #B_list['o'].append((torch.sum(masks[:,0:o], dim=1) + \
+            #    torch.sum(masks[:,o:num_objects+1], dim=1)).clamp(0,1))
             
+            #B_list['f'][0]:  torch.Size([1, 3, 384, 384])
+            #B_list['m'][0]:  torch.Size([1, 384, 384])
+            #B_list['o'][0]:  torch.Size([1, 384, 384])            
             #len(B_list):  3
             #len(B_list['f']):  2
             #len(B_list['m']):  2
-            #len(B_list['o']):  2          
-            #frame:  torch.Size([1, 3, 480, 912])
-            #masks[:,o]:  torch.Size([1, 480, 912])
-            #'0' sum of masks:  torch.Size([1, 480, 912])            
+            #len(B_list['o']):  2                     
 
         # make Batch
         B_ = {}
@@ -272,7 +272,7 @@ class STM(nn.Module):
             B_[arg] = torch.cat(B_list[arg], dim=0)
             #B_[f]:  torch.Size([2, 3, 480, 912]) -> 2 é o num_objects
             #B_[m]:  torch.Size([2, 480, 912])
-            #B_[o]:  torch.Size([2, 480, 912])            
+            #B_[o]:  torch.Size([2, 480, 912])
         
         r4, _, _, _, _ = self.Encoder_M(B_['f'], B_['m'], B_['o'])
         #r4:  torch.Size([2, 1024, 30, 57])

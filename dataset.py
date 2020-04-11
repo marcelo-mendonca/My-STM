@@ -154,7 +154,7 @@ class DAVIS_MO_Train(data.Dataset):
         M = np.zeros((self.K, mask.shape[0], mask.shape[1]), dtype=np.uint8)
         #M:  (11, 480, 854)
         for k in range(self.K):
-            M[k] = (mask == k+1).astype(np.uint8)
+            M[k] = (mask == k).astype(np.uint8)
         return M
     
     def All_to_onehot(self, masks):
