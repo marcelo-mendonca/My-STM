@@ -237,6 +237,8 @@ class STM(nn.Module):
         
         # memorize a frame 
         num_objects = num_objects[0].item()
+        print("aquiiiiiiii: ", num_objects)
+        input('Press Enter button to continue...')
         _, K, H, W = masks.shape # B = 1
         #num_objects item:  2
         # K=11, H=480, W=912
@@ -256,15 +258,6 @@ class STM(nn.Module):
             B_list['o'].append((torch.sum(masks[:,0:o], dim=1) + \
                 torch.sum(masks[:,o:num_objects+1], dim=1)).clamp(0,1))
             
-            if num_objects > 1:
-                print('o: {}, num_objects: {}'.format(o, num_objects))
-                plt.matshow(((torch.sum(masks[:,0:o], dim=1)).clamp(0,1)).permute(1,2,0)[:,:,0])                
-                plt.show()
-                input("Press Enter to continue...")
-                
-                plt.matshow(((torch.sum(masks[:,o:num_objects+1], dim=1)).clamp(0,1)).permute(1,2,0)[:,:,0])                
-                plt.show()
-                input("Press Enter to continue...")
             #len(B_list):  3
             #len(B_list['f']):  2
             #len(B_list['m']):  2

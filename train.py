@@ -14,6 +14,7 @@ from tqdm import tqdm
 import random
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+from tensorboardX import SummaryWriter
 
 ### My libs
 from dataset import DAVIS_MO_Test, DAVIS_MO_Train
@@ -74,7 +75,7 @@ def get_arguments():
 
 
 def run_train(device):
-    print("Inside run...")
+    
     # get arguments
     args = get_arguments()
     
@@ -87,7 +88,7 @@ def run_train(device):
     # data loader
     Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     #Trainset = DAVIS(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), multi_object=(YEAR==17))
-    Trainloader = data.DataLoader(Trainset, batch_size=1, shuffle=False, num_workers=1)
+    Trainloader = data.DataLoader(Trainset, batch_size=4, shuffle=True, num_workers=2)
     
     Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=2)
@@ -98,6 +99,7 @@ def run_train(device):
     if torch.cuda.is_available():
         model.cuda()
     
+    writer = SummaryWriter()
     start_epoch = 0
     
     # load saved model if specified
@@ -125,7 +127,8 @@ def run_train(device):
     params = []
     for key, value in dict(model.named_parameters()).items():
       if value.requires_grad:
-        params += [{'params':[value],'lr':args.lr, 'weight_decay': 4e-5}]
+        #params += [{'params':[value],'lr':args.lr, 'weight_decay': 4e-5}]
+        params += [{'params':[value],'lr':args.lr}]
     print('Parameters lenght: ', len(params))
     
     criterion = torch.nn.BCELoss()
@@ -135,17 +138,17 @@ def run_train(device):
     # loop for training/validation
     for epoch in range(start_epoch, args.num_epochs):
         
+        # testing
         if epoch % args.eval_epoch == 1:
-            # testing
             print("Testing...")
             with torch.no_grad():
                 print('[Val] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
                 model.eval()
                 loss = 0
                 iOU = 0
-                pbar = tqdm.tqdm(total=len(Testloader))
+                print("Testing routine still incomplete...")
         
-        #training
+        # training
         model.eval() #set eval mode to disable batchnorm and dropout
         print('[Train] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
         
@@ -153,12 +156,21 @@ def run_train(device):
         #Trainset.frame_skip initial value is 5
         if (epoch > 0) and (epoch % 20 == 0):
             Trainset.frame_skip = min([Trainset.frame_skip+5, 25])
-            
+          
         for seq, V in enumerate(Trainloader):
             
             Fs, Ms, num_objects, info = V
             seq_name = info['name'][0]
             num_frames = info['num_frames'][0].item()
+            
+            print("#Fs: ", Fs.shape)
+            print("#Ms: ", Ms.shape)
+            print("#num_objects: ", num_objects.shape)
+            input('Press Enter button to continue...')
+            ############################
+            #ATENÇÃO: deu ruim qd coloca batch > 1 por causa de num_objects
+            #tem q ver como resolver, especialmente em model -> Pad_mem que
+            #tá dando erro nessa merda...
                     
             
             optimizer.zero_grad()
@@ -173,13 +185,12 @@ def run_train(device):
             #Es:  torch.Size([1, 11, 3, 480, 854])
             
             loss = 0
-            counter = 0
             
             #loop over the 3 frame+annotation samples
             for t in range(1,3):
                 
-                # memorize
-                prev_key, prev_value = model(Fs[:,:,t-1], Es[:,:,t-1], torch.tensor([num_objects]))
+                # memorize torch.tensor([num_objects])
+                prev_key, prev_value = model(Fs[:,:,t-1], Es[:,:,t-1], num_objects)
                 #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 54])
                 #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 54])  
                 
@@ -193,7 +204,7 @@ def run_train(device):
                 #this_values:  torch.Size([1, 11, 512, 1, 30, 54])
                 
                 # segment
-                logit = model(Fs[:,:,t], this_keys, this_values, torch.tensor([num_objects]))
+                logit = model(Fs[:,:,t], this_keys, this_values, num_objects)
                 #(t=39) logit: torch.Size([1, 11, 480, 910])
                 
                 
@@ -204,34 +215,34 @@ def run_train(device):
                 
                 # update
                 keys, values = this_keys, this_values
-                print('########### t: ', t)
-                input('Press Enter button to continue...')
+                #print('########### t: ', t)
+                #input('Press Enter button to continue...')
                 
             ##########################
-            #Parei aqui... tenho q entender como passar Es e Ms pra loss
-            loss = loss + criterion(Es, Ms.float())
-            counter += 1
-            
-            print('counter: ', counter)
-            print('loss: ', loss)
-            input('Press Enter button to continue...')
-                
+            # parei aqui, nao sei onde deve ficar a loss... =(
+            loss = loss + criterion(Es[:,:,1:2], Ms[:,:,1:2].float())
+              
                 
             if loss > 0:  
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 
-            input('Press Enter button to continue...')
+            # logging and display
+            #if (seq+1) % args.disp_interval == 0:
+            if (seq+1) % 10 == 0:
+                writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
+                #writer.add_scalar('Train/IOU', iou(torch.cat((1-all_E, all_E), dim=1), all_M), i + epoch * iters_per_epoch)
+                print('loss: {}'.format(loss))
+                
+            
+            ("Fim do loop: {}/{} ".format(seq,iters_per_epoch))
+            #input('Press Enter button to continue...')
             
            
             
         
     
-    print('Endddddddddddddddd')
-    # logging and display
-    
-    #end
     
     
     
@@ -249,42 +260,4 @@ if __name__ == "__main__":
 #     input('Press Enter button to continue...')
     
     
-            #[hockey]: num_frames: 75, num_objects: 3
-            
-            #STM dataloader (obs.: arbitrary self.K=11):
-            #Shape Fs:  torch.Size([1, 3, 75, 480, 854])
-            #Shape Ms:  torch.Size([1, 11, 75, 480, 854])
-            #info: {'name': ['motorbike'], 'num_frames': tensor([43]), 'size_480p': [tensor([480]), tensor([854])]}
-            
-            #RGMP dataloader (obs.: K = num_objects, h and w padding):
-            #Shape Fs:  torch.Size([1, 1, 3, 75, 512, 864])
-            #Shape Ms:  torch.Size([1, 1, 3, 75, 512, 864])
-            #info: {'name': ['motorbike'], 'num_frames': tensor([43]), 'num_objects': tensor([3], dtype=torch.uint8), 
-            #'pad': [[tensor([16]), tensor([16])], [tensor([5]), tensor([5])]]}
-            
-            #Exemplo para entender algumas indexações
-            #Se: num_frames = info['num_frames'] -> num_frames recebe tensor([76])
-            #Se: num_frames = info['num_frames'][0] -> num_frames recebe tensor(76)
-            #Se: num_frames = info['num_frames'][0].item() -> num_frames recebe 76            
-            #Fs:  torch.Size([1, 3, 60, 480, 854])
-            #Ms:  torch.Size([1, 11, 60, 480, 854])
-            #Fs[0]:  torch.Size([3, 60, 480, 854])
-            #Ms[0]:  torch.Size([11, 60, 480, 854])
-            #Fs[:,1]: torch.Size([1, 60, 480, 854])
-            #Ms[:,2]: torch.Size([1, 60, 480, 854])
-            #Fs[:,:,1]: torch.Size([1, 3, 480, 854])
-            #Fs[:,:,:,1]:  torch.Size([1, 3, 60, 854])
-            
-            #[boxing-fisheye]: num_frames: 87, num_objects: 3
-            #Shape Ms:  torch.Size([1, 1, 3, 87, 512, 864])
-            #Shape Ms[0]:  torch.Size([1, 3, 87, 512, 864])
-            #Shape all_E:  torch.Size([1, 3, 87, 512, 864])
-            #Shape all_E[:,0,0]:  torch.Size([1, 512, 864])
-            #Shape Ms[:,:,0]:  torch.Size([1, 3, 512, 864])
-            
-            #[horsejump-low]: num_frames: 60, num_objects: 2
-            #Shape Ms:  torch.Size([1, 1, 2, 60, 512, 864])
-            #Shape Ms[0]:  torch.Size([1, 2, 12, 512, 864])
-            #Shape all_E:  torch.Size([1, 2, 12, 512, 864])            
-            #Shape all_E[:,0,0]:  torch.Size([1, 512, 864])
-            #Shape Ms[:,:,0]:  torch.Size([1, 2, 512, 864])
+           
