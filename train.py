@@ -88,7 +88,7 @@ def run_train(device):
     # data loader
     Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     #Trainset = DAVIS(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), multi_object=(YEAR==17))
-    Trainloader = data.DataLoader(Trainset, batch_size=1, shuffle=True, num_workers=1)
+    Trainloader = data.DataLoader(Trainset, batch_size=1, shuffle=False, num_workers=1)
     
     Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=2)
@@ -213,8 +213,8 @@ def run_train(device):
                 
                 # update
                 keys, values = this_keys, this_values
-                print('########### t: ', t)
-                input('Press Enter button to continue...')
+                #print('########### t: ', t)
+                #input('Press Enter button to continue...')
                 
             ##########################
             # parei aqui, nao sei onde deve ficar a loss... =(
@@ -236,7 +236,7 @@ def run_train(device):
             ("Fim do loop: {}/{} ".format(seq,iters_per_epoch))
             #input('Press Enter button to continue...')
             
-        if epoch % 10 == 0: # and epoch > 0:
+        if True: #epoch % 10 == 0 and epoch > 0:
             save_name = '{}/{}.pth'.format(MODEL_DIR, epoch)
             torch.save({'epoch': epoch,
                         'model': model.state_dict(), 
