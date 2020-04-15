@@ -183,6 +183,7 @@ def run_train(device):
             #num_objects:  torch.Size([1, 1])
             
             loss = 0
+            loss_test = 0
             
             #loop over the 3 frame+annotation samples
             for t in range(1,3):
@@ -218,7 +219,10 @@ def run_train(device):
                 
             ##########################
             # parei aqui, nao sei onde deve ficar a loss... =(
-            loss = loss + criterion(Es[:,:,1:2], Ms[:,:,1:2].float())              
+            loss = loss + criterion(Es[:,:,1:2], Ms[:,:,1:2].float())
+            loss_test1 = criterion(Es[:,:,1], Ms[:,:,1].float())
+            loss_test2 = criterion(Es[:,:,2], Ms[:,:,2].float())
+            loss_test = loss_test1 + loss_test2
                 
             if loss > 0:  
                 optimizer.zero_grad()
@@ -231,6 +235,7 @@ def run_train(device):
                 writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
                 #writer.add_scalar('Train/IOU', iou(torch.cat((1-all_E, all_E), dim=1), all_M), i + epoch * iters_per_epoch)
                 print('loss: {}'.format(loss))
+                print('loss_test: {}'.format(loss_test))
                 
             
             ("Fim do loop: {}/{} ".format(seq,iters_per_epoch))
