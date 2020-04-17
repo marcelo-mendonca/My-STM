@@ -23,6 +23,7 @@ from helpers import *
 
 # Constants
 MODEL_DIR = 'saved_models'
+os.makedirs(MODEL_DIR, exist_ok=True)
 NUM_EPOCHS = 1000
 
 
@@ -159,9 +160,18 @@ def run_train(device):
           
         for seq, V in enumerate(Trainloader):
             
+            ############# interrupção só para testar
+            if seq > 4:
+                break
+            
             Fs, Ms, num_objects, info = V
             seq_name = info['name'][0]
             num_frames = info['num_frames'][0].item()
+            
+            # send input tensor to gpu
+            if torch.cuda.is_available():
+                Fs = Fs.to(device)
+                Ms = Ms.to(device)
             
             ############################
             #ATENÇÃO: deu ruim qd coloca batch > 1 por causa de num_objects
@@ -183,9 +193,8 @@ def run_train(device):
             #num_objects:  torch.Size([1, 1])
             
             loss = 0
-            loss_test = 0
             
-            #loop over the 3 frame+annotation samples
+            #loop over the 3-1 frame+annotation samples (1st frame is reference frame)
             for t in range(1,3):
                 
                 # memorize torch.tensor([num_objects])
@@ -204,8 +213,7 @@ def run_train(device):
                 
                 # segment
                 logit = model(Fs[:,:,t], this_keys, this_values, torch.tensor([num_objects]))
-                #(t=39) logit: torch.Size([1, 11, 480, 910])
-                
+                #(t=39) logit: torch.Size([1, 11, 480, 910])                
                 
                 Es[:,:,t] = F.softmax(logit, dim=1)
                 #Es:  torch.Size([1, 11, 3, 480, 854])
@@ -214,16 +222,13 @@ def run_train(device):
                 
                 # update
                 keys, values = this_keys, this_values
-                #print('########### t: ', t)
-                #input('Press Enter button to continue...')
                 
-            ##########################
-            # parei aqui, nao sei onde deve ficar a loss... =(
-            loss = loss + criterion(Es[:,:,1:2], Ms[:,:,1:2].float())
-            loss_test1 = criterion(Es[:,:,1], Ms[:,:,1].float())
-            loss_test2 = criterion(Es[:,:,2], Ms[:,:,2].float())
-            loss_test = loss_test1 + loss_test2
-                
+                # compute loss
+                loss += criterion(Es[:,:,t].clone(), Ms[:,:,t].float())            
+            
+            # divive loss by Nº frames = 2 (t=1 and t=2; t=0 is reference frame)
+            loss /= 2
+            
             if loss > 0:  
                 optimizer.zero_grad()
                 loss.backward()
@@ -235,19 +240,18 @@ def run_train(device):
                 writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
                 #writer.add_scalar('Train/IOU', iou(torch.cat((1-all_E, all_E), dim=1), all_M), i + epoch * iters_per_epoch)
                 print('loss: {}'.format(loss))
-                print('loss_test: {}'.format(loss_test))
                 
             
-            ("Fim do loop: {}/{} ".format(seq,iters_per_epoch))
-            #input('Press Enter button to continue...')
+            print("Fim do loop: {}/{} ".format(seq,iters_per_epoch))
             
-        if True: #epoch % 10 == 0 and epoch > 0:
+            
+        if epoch % 10 == 0 and epoch > 0:
             save_name = '{}/{}.pth'.format(MODEL_DIR, epoch)
-            torch.save({'epoch': epoch,
-                        'model': model.state_dict(), 
-                        'optimizer': optimizer.state_dict(),
-                       },
-                       save_name)   
+            torch.save({'epoch': epoch,'model': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),}, save_name)
+            print('Model saved in: {}'.format(save_name))
+        
+        print("The End")
     
     
         

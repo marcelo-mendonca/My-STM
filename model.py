@@ -21,8 +21,6 @@ import sys
 
 from helpers import *
  
-print('Space-time Memory Networks: initialized.')
- 
 class ResBlock(nn.Module):
     def __init__(self, indim, outdim=None, stride=1):
         super(ResBlock, self).__init__()
