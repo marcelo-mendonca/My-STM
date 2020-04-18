@@ -27,7 +27,7 @@ class DAVIS_MO_Train(data.Dataset):
         self.size_480p = {}
         self.train_triplets = {}
         self.frame_skip = 5
-        self.fixed_size = (384,384)
+        self.fixed_size = (100, 100) #(384,384)
         idx = 0
         
         with open(os.path.join(_imset_f), "r") as lines:

@@ -28,7 +28,7 @@ NUM_EPOCHS = 1000
 
 
 def main():
-    print(">>>> Hello world! \nNew STM training script starting...")
+    print(">>>> Hello world! \nMy STM training script starting...")
     
     print('Python version: ', sys.version)   
     print('Pytorch version: ', torch.__version__)    
@@ -89,7 +89,7 @@ def run_train(device):
     # data loader
     Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     #Trainset = DAVIS(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), multi_object=(YEAR==17))
-    Trainloader = data.DataLoader(Trainset, batch_size=1, shuffle=False, num_workers=1)
+    Trainloader = data.DataLoader(Trainset, batch_size=4, shuffle=True, num_workers=2)
     
     Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=2)
@@ -164,26 +164,18 @@ def run_train(device):
             if seq > 4:
                 break
             
-            Fs, Ms, num_objects, info = V
-            seq_name = info['name'][0]
-            num_frames = info['num_frames'][0].item()
+            Fss, Mss, nums_objects, _ = V
             
             # send input tensor to gpu
             if torch.cuda.is_available():
-                Fs = Fs.to(device)
-                Ms = Ms.to(device)
-            
-            ############################
-            #ATENÇÃO: deu ruim qd coloca batch > 1 por causa de num_objects
-            #tem q ver como resolver, especialmente em model -> Pad_mem que
-            #tá dando erro nessa merda...                    
+                Fss = Fss.to(device)
+                Mss = Mss.to(device)
+                nums_objects = nums_objects.to(device)
             
             optimizer.zero_grad()
             
             tt = time.time()
             
-            Es = torch.zeros_like(Ms)
-            Es[:,:,0] = Ms[:,:,0]
             #Es recebe de Ms a máscara com menor indice temporal; as outras posições de Es ficam vazias
             #Fs:  torch.Size([1, 3, 3, 480, 854])
             #Ms:  torch.Size([1, 11, 3, 480, 854])
@@ -194,40 +186,55 @@ def run_train(device):
             
             loss = 0
             
-            #loop over the 3-1 frame+annotation samples (1st frame is reference frame)
-            for t in range(1,3):
+            batch_size = int(Fss.size(0))
+            for batch_idx in range(batch_size):                
                 
-                # memorize torch.tensor([num_objects])
-                prev_key, prev_value = model(Fs[:,:,t-1], Es[:,:,t-1], torch.tensor([num_objects]))
-                #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 54])
-                #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 54])  
+                Fs, Ms = Fss[batch_idx], Mss[batch_idx]
+                Fs = torch.unsqueeze(Fs, dim=0)
+                Ms = torch.unsqueeze(Ms, dim=0)
+                num_objects = nums_objects[batch_idx]
+                Es = torch.zeros_like(Ms)
+                Es[:,:,0] = Ms[:,:,0]
                 
-                if t-1 == 0:
-                    this_keys, this_values = prev_key, prev_value # only prev memory
-                else:
-                    this_keys = torch.cat([keys, prev_key], dim=3)
-                    this_values = torch.cat([values, prev_value], dim=3)
-                #t = 1:
-                #this_keys:  torch.Size([1, 11, 128, 1, 30, 54])
-                #this_values:  torch.Size([1, 11, 512, 1, 30, 54])
-                
-                # segment
-                logit = model(Fs[:,:,t], this_keys, this_values, torch.tensor([num_objects]))
-                #(t=39) logit: torch.Size([1, 11, 480, 910])                
-                
-                Es[:,:,t] = F.softmax(logit, dim=1)
-                #Es:  torch.Size([1, 11, 3, 480, 854])
-                #Es[:,:,t]:  torch.Size([1, 11, 480, 854])
-                #Ms:  torch.Size([1, 11, 3, 480, 854])
-                
-                # update
-                keys, values = this_keys, this_values
-                
-                # compute loss
-                loss += criterion(Es[:,:,t].clone(), Ms[:,:,t].float())            
+                if num_objects[0].item() > 1:
+                    print("num_objects: ", num_objects[0].item())
             
-            # divive loss by Nº frames = 2 (t=1 and t=2; t=0 is reference frame)
-            loss /= 2
+                #loop over the 3-1 frame+annotation samples (1st frame is reference frame)
+                for t in range(1,3):
+                    
+                    # memorize torch.tensor([num_objects])
+                    prev_key, prev_value = model(Fs[:,:,t-1], Es[:,:,t-1], torch.tensor([num_objects]))
+                    #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 54])
+                    #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 54])  
+                    
+                    if t-1 == 0:
+                        this_keys, this_values = prev_key, prev_value # only prev memory
+                    else:
+                        this_keys = torch.cat([keys, prev_key], dim=3)
+                        this_values = torch.cat([values, prev_value], dim=3)
+                    #t = 1:
+                    #this_keys:  torch.Size([1, 11, 128, 1, 30, 54])
+                    #this_values:  torch.Size([1, 11, 512, 1, 30, 54])
+                    
+                    # segment
+                    logit = model(Fs[:,:,t], this_keys, this_values, torch.tensor([num_objects]))
+                    #(t=39) logit: torch.Size([1, 11, 480, 910])                
+                    
+                    Es[:,:,t] = F.softmax(logit, dim=1)
+                    #Es:  torch.Size([1, 11, 3, 480, 854])
+                    #Es[:,:,t]:  torch.Size([1, 11, 480, 854])
+                    #Ms:  torch.Size([1, 11, 3, 480, 854])
+                    
+                    # update
+                    keys, values = this_keys, this_values
+                    
+                    # compute loss
+                    loss += criterion(Es[:,:,t].clone(), Ms[:,:,t].float()) 
+                    
+                print('batch: {}/{} '.format(batch_idx+1, batch_size))
+            
+            # divive loss by Nº frames = 2 (t=1 and t=2; t=0 is reference frame) * batch size
+            loss /= 2*batch_size
             
             if loss > 0:  
                 optimizer.zero_grad()
