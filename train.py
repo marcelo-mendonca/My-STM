@@ -10,7 +10,7 @@ import argparse
 import os
 from torch.utils import data
 import torch.nn as nn
-from tqdm import tqdm
+import tqdm
 import random
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
@@ -25,6 +25,7 @@ from helpers import *
 MODEL_DIR = 'saved_models'
 os.makedirs(MODEL_DIR, exist_ok=True)
 NUM_EPOCHS = 1000
+inputs_to_gpu = False
 
 
 def main():
@@ -69,7 +70,7 @@ def get_arguments():
                       default=1e-5, type=float)
     parser.add_argument('--eval_epoch', dest='eval_epoch',
                       help='interval of epochs to perform validation',
-                      default=10, type=int)
+                      default=3, type=int)
     
     #return
     return parser.parse_args()
@@ -136,18 +137,53 @@ def run_train(device):
     optimizer = torch.optim.Adam(params, lr=args.lr)
     iters_per_epoch = len(Trainloader)
     
-    # loop for training/validation
+    # loop for training and validation
     for epoch in range(start_epoch, args.num_epochs):
         
-        # testing
-        if epoch % args.eval_epoch == 1:
-            print("Testing...")
+        # testing ##################################
+        if (epoch+1) % args.eval_epoch == 0:
+            print("Validating...")
             with torch.no_grad():
                 print('[Val] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
                 model.eval()
-                loss = 0
-                iOU = 0
-                print("Testing routine still incomplete...")
+                
+                #pbar = tqdm.tqdm(total=len(Testloader))
+                for seq, V in enumerate(Testloader):
+                    #pbar.update(1)
+                    
+                    ############# interrupção só para testar
+                    if seq > 4:
+                        break
+                    
+                    Fss, Mss, nums_objects, _ = V
+
+                    if torch.cuda.is_available() and inputs_to_gpu:
+                        Fss = Fss.to(device)
+                        Mss = Mss.to(device)
+                        nums_objects = nums_objects.to(device)
+                        
+                    batch_size = int(Fss.size(0))
+                    for batch_idx in range(batch_size):                
+                        
+                        #Fs, Ms = Fss[batch_idx], Mss[batch_idx]
+                        Fs, Ms = Fss[batch_idx,:,:,0:99,0:99], Mss[batch_idx,:,:,0:99,0:99]
+                        Fs = torch.unsqueeze(Fs, dim=0)
+                        Ms = torch.unsqueeze(Ms, dim=0)
+                        num_objects = nums_objects[batch_idx]
+                        #num_frames = Fs.size(2)
+                        num_frames = 10
+                        
+                        run_validate(model, Fs, Ms, num_frames, num_objects, criterion, Mem_every=5, Mem_number=None)
+                        #model = STM()
+                        #Fs:  torch.Size([1, 3, 69, 480, 910])
+                        #Ms:  torch.Size([1, 11, 69, 480, 910])
+                        #num_frames: 69
+                        #num_objects:  2
+
+                #pbar.close()
+                      
+        # end of testing ###########################                
+                
         
         # training
         model.eval() #set eval mode to disable batchnorm and dropout
@@ -164,10 +200,10 @@ def run_train(device):
             if seq > 4:
                 break
             
-            Fss, Mss, nums_objects, _ = V
+            Fss, Mss, nums_objects, info = V
             
-            # send input tensor to gpu
-            if torch.cuda.is_available():
+            # send input tensors to gpu
+            if torch.cuda.is_available() and inputs_to_gpu:
                 Fss = Fss.to(device)
                 Mss = Mss.to(device)
                 nums_objects = nums_objects.to(device)
@@ -195,9 +231,6 @@ def run_train(device):
                 num_objects = nums_objects[batch_idx]
                 Es = torch.zeros_like(Ms)
                 Es[:,:,0] = Ms[:,:,0]
-                
-                if num_objects[0].item() > 1:
-                    print("num_objects: ", num_objects[0].item())
             
                 #loop over the 3-1 frame+annotation samples (1st frame is reference frame)
                 for t in range(1,3):
@@ -260,6 +293,60 @@ def run_train(device):
         
         print("The End")
     
+
+def run_validate(model, Fs, Ms, num_frames, num_objects, criterion, Mem_every=None, Mem_number=None):
+    #model = STM()
+    #Fs:  torch.Size([1, 3, 69, 480, 910])
+    #Ms:  torch.Size([1, 11, 69, 480, 910])
+    #num_frames: 69
+    #num_objects:  2 
+
+    # initialize storage tensors
+    if Mem_every:
+        to_memorize = [int(i) for i in np.arange(0, num_frames, step=Mem_every)]
+    elif Mem_number:
+        to_memorize = [int(round(i)) for i in np.linspace(0, num_frames, num=Mem_number+2)[:-1]]
+    else:
+        raise NotImplementedError
+    #Se mem_every=5, então to_memorize = [0, 5, 10, 15...]    
+
+    Es = torch.zeros_like(Ms)
+    Es[:,:,0] = Ms[:,:,0]
+    #Es:  torch.Size([1, 11, 69, 480, 910])
+
+    loss = 0
+    for t in tqdm.tqdm(range(1, num_frames)):
+
+        # memorize
+        with torch.no_grad():
+            prev_key, prev_value = model(Fs[:,:,t-1], Es[:,:,t-1], torch.tensor([num_objects]))
+            #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 57])
+            #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 57])
+ 
+        if t-1 == 0: # 
+            this_keys, this_values = prev_key, prev_value # only prev memory
+        else:
+            this_keys = torch.cat([keys, prev_key], dim=3)
+            this_values = torch.cat([values, prev_value], dim=3)
+        
+        # segment
+        with torch.no_grad():
+            logit = model(Fs[:,:,t], this_keys, this_values, torch.tensor([num_objects]))
+            #(t=39) logit: torch.Size([1, 11, 480, 910])
+        
+        Es[:,:,t] = F.softmax(logit, dim=1)
+        #(t=39) Es: torch.Size([1, 11, 69, 480, 910])
+        
+        # update
+        if t-1 in to_memorize:
+            keys, values = this_keys, this_values
+        
+        # compute loss
+        loss += criterion(Es[:,:,t].clone(), Ms[:,:,t].float())
+        
+    loss /= num_frames-1
+    print('val loss: {}'.format(loss))
+        
     
         
 if __name__ == "__main__":
