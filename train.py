@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
 ### My libs
-from dataset import DAVIS_MO_Test, DAVIS_MO_Train
+from dataset import DAVIS_MO_Test, DAVIS_MO_Train, DAVIS_MO_Val
 from model import STM
 from helpers import *
 
@@ -25,7 +25,7 @@ from helpers import *
 MODEL_DIR = 'saved_models'
 os.makedirs(MODEL_DIR, exist_ok=True)
 NUM_EPOCHS = 1000
-inputs_to_gpu = False
+inputs_to_gpu = True
 
 
 def main():
@@ -90,12 +90,15 @@ def run_train(device):
     # data loader
     Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     #Trainset = DAVIS(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), multi_object=(YEAR==17))
-    Trainloader = data.DataLoader(Trainset, batch_size=4, shuffle=True, num_workers=2)
+    Trainloader = data.DataLoader(Trainset, batch_size=4, shuffle=False, num_workers=2)
+    
+    Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    Valloader = data.DataLoader(Valset, batch_size=12, shuffle=False, num_workers=4)
     
     Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=2)
+    Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=1)
     
-    # Intantiate the model
+    # Isntantiate the model
     model = nn.DataParallel(STM())
     
     if torch.cuda.is_available():
@@ -140,15 +143,17 @@ def run_train(device):
     # loop for training and validation
     for epoch in range(start_epoch, args.num_epochs):
         
-        # testing ##################################
+        # validating ##################################
         if (epoch+1) % args.eval_epoch == 0:
-            print("Validating...")
+
             with torch.no_grad():
                 print('[Val] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
                 model.eval()
-                
-                #pbar = tqdm.tqdm(total=len(Testloader))
-                for seq, V in enumerate(Testloader):
+                new_validate(model, criterion, Valloader, inputs_to_gpu, device, Mem_every=5, Mem_number=None)
+                print("terminou o validate")
+                input("Press Enter button to continue...")
+                #pbar = tqdm.tqdm(total=len(Valloader))
+                for seq, V in enumerate(Valloader):
                     #pbar.update(1)
                     
                     ############# interrupção só para testar
@@ -156,13 +161,16 @@ def run_train(device):
                         break
                     
                     Fss, Mss, nums_objects, _ = V
+                    #Fss:  torch.Size([4, 3, 1, 100, 100])
+                    #Mss:  torch.Size([4, 11, 1, 100, 100])
+                    #nums_objects:  tensor([[1],[1],[1],[1]])
 
                     if torch.cuda.is_available() and inputs_to_gpu:
                         Fss = Fss.to(device)
                         Mss = Mss.to(device)
                         nums_objects = nums_objects.to(device)
                         
-                    batch_size = int(Fss.size(0))
+                    batch_size = int(Fss.size(0))                    
                     for batch_idx in range(batch_size):                
                         
                         #Fs, Ms = Fss[batch_idx], Mss[batch_idx]
@@ -201,6 +209,10 @@ def run_train(device):
                 break
             
             Fss, Mss, nums_objects, info = V
+
+            #info:  {'name': ['cat-girl', 'classic-car', 'lady-running', 'swing'], 
+            #'num_frames': tensor([89, 63, 65, 60]), 
+            #'size_480p': [tensor([100, 100, 100, 100]), tensor([100, 100, 100, 100])]}
             
             # send input tensors to gpu
             if torch.cuda.is_available() and inputs_to_gpu:
@@ -346,6 +358,110 @@ def run_validate(model, Fs, Ms, num_frames, num_objects, criterion, Mem_every=No
         
     loss /= num_frames-1
     print('val loss: {}'.format(loss))
+    
+
+def new_validate(model, criterion, Valloader, inputs_to_gpu, device, Mem_every=None, Mem_number=None):
+    #model = STM()
+    #Fs:  torch.Size([1, 3, 69, 480, 910])
+    #Ms:  torch.Size([1, 11, 69, 480, 910])
+    #num_frames: 69
+    #num_objects:  2
+    
+    idx = 0
+    next_change = 0
+    to_second_frame = False
+    
+    for seq, V in enumerate(Valloader):
+                    
+        ############# interrupção só para testar
+        #if seq > 4:
+        #    break
+
+        
+        Fss, Mss, nums_objects, infos = V
+        nums_frames = infos['num_frames']
+        #Fss:  torch.Size([4, 3, 1, 100, 100])
+        #Mss:  torch.Size([4, 11, 1, 100, 100])
+        #nums_objects:  tensor([[1],[1],[1],[1]])
+        #infos:  {'name': ['bear', 'bear', 'bear', 'bear'], 
+        #       'num_frames': tensor([82, 82, 82, 82]), 
+        #       'size_480p': [tensor([100, 100, 100, 100]), tensor([100, 100, 100, 100])]}    
+        
+        if torch.cuda.is_available() and inputs_to_gpu:
+            Fss = Fss.to(device)
+            Mss = Mss.to(device)
+            nums_objects = nums_objects.to(device)
+            
+        batch_size = int(Fss.size(0))                    
+        for batch_idx in range(batch_size):                
+            
+            Fs, Ms = Fss[batch_idx,:,0], Mss[batch_idx,:,0]
+            Fs = torch.unsqueeze(Fs, dim=0)
+            Ms = torch.unsqueeze(Ms, dim=0)
+            num_objects = nums_objects[batch_idx]
+            num_frames = nums_frames[batch_idx].item()
+            
+            # New sequence begins
+            if idx == next_change:
+                next_change += num_frames
+                if Mem_every:
+                    to_memorize = [int(i) for i in np.arange(idx, next_change, step=Mem_every)]
+                elif Mem_number:
+                    to_memorize = [int(round(i)) for i in np.linspace(idx, next_change, num=Mem_number+2)[:-1]]
+                else:
+                    raise NotImplementedError
+                #Se mem_every=5, então to_memorize = [0, 5, 10, 15...]
+                loss = 0
+                
+                first_frame = True
+                second_frame = False
+                to_second_frame = True
+            elif to_second_frame:
+                first_frame = False
+                second_frame = True
+                to_second_frame = False
+            else:
+                first_frame = False
+                second_frame = False
+                to_second_frame = False        
+            
+            if not first_frame:
+        
+                # memorize
+                with torch.no_grad():
+                    prev_key, prev_value = model(prev_Fs, prev_Ms, torch.tensor([num_objects]))
+                    #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 57])
+                    #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 57])
+         
+                if second_frame: # 
+                    this_keys, this_values = prev_key, prev_value # only prev memory
+                else:
+                    this_keys = torch.cat([keys, prev_key], dim=3)
+                    this_values = torch.cat([values, prev_value], dim=3)                
+
+                # segment
+                with torch.no_grad():
+                    logit = model(Fs, this_keys, this_values, torch.tensor([num_objects]))
+                    #(t=39) logit: torch.Size([1, 11, 480, 910])
+                
+                    pred = F.softmax(logit, dim=1)
+                    #(t=39) Es: torch.Size([1, 11, 69, 480, 910])
+                    
+                    # compute loss
+                    loss += criterion(pred, Ms.float())
+                
+                # update
+                if second_frame or idx in to_memorize:
+                    keys, values = this_keys, this_values
+                
+            prev_Fs = Fs
+            prev_Ms = Ms
+            idx += 1       
+            print("idx: {}, seq: {}/{}, batch_idx: {}, num_frames: {} ".format(idx, seq,len(Valloader), batch_idx, num_frames))
+            
+        if idx == next_change:
+            loss /= num_frames-1
+            print('val loss: {}'.format(loss))
         
     
         
