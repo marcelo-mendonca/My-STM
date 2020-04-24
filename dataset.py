@@ -144,6 +144,11 @@ class DAVIS_MO_Train(data.Dataset):
         
         return (f1, f2, frame)
     
+    def Set_frame_skip(self, epoch):
+        #frame_skip is increased by 5 at every 20 epoch during main-training
+        if (epoch > 0) and (epoch % 20 == 0):
+            self.frame_skip = min([self.frame_skip+5, 25])
+    
     def To_onehot(self, mask):
         M = np.zeros((self.K, mask.shape[0], mask.shape[1]), dtype=np.uint8)
         #M:  (11, 480, 854)
