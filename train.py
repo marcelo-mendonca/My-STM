@@ -16,7 +16,6 @@ import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 import logging
 import time
-
 ### My libs
 from dataset import DAVIS_MO_Train, DAVIS_MO_Val
 from model import STM

@@ -88,6 +88,18 @@ def overlay_davis(image,mask,colors=[255,0,0],cscale=2,alpha=0.4):
 
     return im_overlay.astype(image.dtype)
 
+def iou(pred, gt):
+    pred = pred.squeeze().cpu().data.numpy()
+    pred = ToLabel(pred)
+    gt = gt.squeeze().cpu().data.numpy()
+    agg = pred + gt
+    i = float(np.sum(agg == 2))
+    u = float(np.sum(agg > 0))
+    return i / u
+
+def ToLabel(E):
+    fgs = np.argmax(E, axis=0).astype(np.float32)
+    return fgs.astype(np.uint8)
 
 
 
