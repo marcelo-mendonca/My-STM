@@ -13,7 +13,8 @@ import torch.nn as nn
 from tqdm import tqdm
 #import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
+#from tensorboardX import SummaryWriter
 import logging
 import time
 ### My libs
@@ -87,8 +88,6 @@ def run_train():
         print('Cuda version: ', torch.version.cuda)
         print('Current GPU id: ', torch.cuda.current_device())
         print('Device name: ', torch.cuda.get_device_name(device=torch.cuda.current_device()))
-        if hasattr(torch.cuda, "memory_summary"):        
-            print('Memory: ', torch.cuda.memory_summary(device=torch.cuda.current_device(),abbreviated=True))
         print('Number of available devices:', num_devices)
     else:
         print('GPU is not available. CPU will be used.')
@@ -114,10 +113,10 @@ def run_train():
     print("Model instantiated")    
     if torch.cuda.is_available():
         model = model.to(device)
-        print("...and sent to cuda")
+        print("Model sent to cuda")
         if num_devices > 1:
             model = nn.DataParallel(model)
-            print("...and parallelised")
+            print("Model parallelised in {} GPUs".format(num_devices))
     
     # parameters, optmizer and loss
     params = []
@@ -230,9 +229,11 @@ def run_train():
             # logging and display
             #if (seq+1) % args.disp_interval == 0:
             if (seq+1) % 1 == 0:
+                this_iou = iou(Ms, Ms)
                 writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
-                #writer.add_scalar('Train/IOU', iou(torch.cat((1-all_E, all_E), dim=1), all_M), i + epoch * iters_per_epoch)
-                print('[TRAIN] idx: {}, loss: {}'.format(seq, loss))
+                writer.add_scalar('Train/IOU', this_iou, seq + epoch * iters_per_epoch)
+                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, this_iou))
+              
                 
             
             #print("iteration: {}/{} ".format(seq,iters_per_epoch))

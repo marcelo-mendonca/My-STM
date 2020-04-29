@@ -89,12 +89,32 @@ def overlay_davis(image,mask,colors=[255,0,0],cscale=2,alpha=0.4):
     return im_overlay.astype(image.dtype)
 
 def iou(pred, gt):
+    #pred:  torch.Size([1, 11, 3, 100, 100])
     pred = pred.squeeze().cpu().data.numpy()
+    #pred:  (11, 3, 100, 100)
     pred = ToLabel(pred)
+    #pred:  (3, 100, 100)
     gt = gt.squeeze().cpu().data.numpy()
+    #gt:  (11, 3, 100, 100)
     agg = pred + gt
     i = float(np.sum(agg == 2))
+    print("#i: ", i.shape)
     u = float(np.sum(agg > 0))
+    print("#u: ", u.shape)
+    for i in range(11):
+        for j in range(3):
+            #Ms:  torch.Size([4, 11, 3, 480, 854])
+            #pred:  (3, 100, 100)
+            #agg:  (11, 3, 100, 100)
+            print("#pred: ", pred.shape)
+            print("#agg: ", agg.shape)
+            plt.matshow(pred[i,j])
+            plt.show()
+            input("Press Enter to continue...")
+            plt.matshow(agg[i,j])
+            plt.show()
+            input("Press Enter to continue...")
+    
     return i / u
 
 def ToLabel(E):
