@@ -13,8 +13,8 @@ import torch.nn as nn
 from tqdm import tqdm
 #import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
-#from tensorboardX import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
+from tensorboardX import SummaryWriter
 import logging
 import time
 ### My libs
@@ -229,11 +229,10 @@ def run_train():
             # logging and display
             #if (seq+1) % args.disp_interval == 0:
             if (seq+1) % 1 == 0:
-                this_iou = iou(Ms, Ms)
+                mean_iou = iou(Es[:,:,1:3], Ms[:,:,1:3])
                 writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
-                writer.add_scalar('Train/IOU', this_iou, seq + epoch * iters_per_epoch)
-                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, this_iou))
-              
+                writer.add_scalar('Train/IOU', mean_iou, seq + epoch * iters_per_epoch)
+                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, this_iou))              
                 
             
             #print("iteration: {}/{} ".format(seq,iters_per_epoch))

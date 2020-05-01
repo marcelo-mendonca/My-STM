@@ -88,34 +88,27 @@ def overlay_davis(image,mask,colors=[255,0,0],cscale=2,alpha=0.4):
 
     return im_overlay.astype(image.dtype)
 
-def iou(pred, gt):
-    #pred:  torch.Size([1, 11, 3, 100, 100])
-    pred = pred.squeeze().cpu().data.numpy()
-    #pred:  (11, 3, 100, 100)
-    pred = ToLabel(pred)
-    #pred:  (3, 100, 100)
-    gt = gt.squeeze().cpu().data.numpy()
-    #gt:  (11, 3, 100, 100)
-    agg = pred + gt
-    i = float(np.sum(agg == 2))
-    print("#i: ", i.shape)
-    u = float(np.sum(agg > 0))
-    print("#u: ", u.shape)
-    for i in range(11):
-        for j in range(3):
-            #Ms:  torch.Size([4, 11, 3, 480, 854])
-            #pred:  (3, 100, 100)
-            #agg:  (11, 3, 100, 100)
-            print("#pred: ", pred.shape)
-            print("#agg: ", agg.shape)
-            plt.matshow(pred[i,j])
-            plt.show()
-            input("Press Enter to continue...")
-            plt.matshow(agg[i,j])
-            plt.show()
-            input("Press Enter to continue...")
+def iou(Es, Ms):
+    #Es:  torch.Size([4, 11, 2, 100, 100])
+    #Ms:  torch.Size([4, 11, 2, 100, 100])
+    batch_size, _, num_frames, _, _ = Es.size()
+    mean_iou = 0.0
+    for b in range(batch_size):
+        for f in range(num_frames):            
+            pred = Es[b,:,f].unsqueeze(0)
+            #pred:  torch.Size([1, 11, 100, 100])
+            gt = Ms[b,:,f].cpu().data.numpy()
+            #gt:  (11, 100, 100)            
+            pred = torch.cat((1-pred, pred), dim=0)
+            #pred:  torch.Size([2, 11, 100, 100])
+            pred = ToLabel(pred.cpu().data.numpy())
+            #pred:  (11, 100, 100)
+            agg = pred + gt
+            i = float(np.sum(agg == 2))
+            u = float(np.sum(agg > 0))
+            mean_iou += i/u              
     
-    return i / u
+    return mean_iou/(batch_size*num_frames)
 
 def ToLabel(E):
     fgs = np.argmax(E, axis=0).astype(np.float32)
