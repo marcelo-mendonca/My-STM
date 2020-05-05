@@ -232,7 +232,7 @@ def run_train():
                 mean_iou = iou(Es[:,:,1:3], Ms[:,:,1:3])
                 writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
                 writer.add_scalar('Train/IOU', mean_iou, seq + epoch * iters_per_epoch)
-                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, this_iou))              
+                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, mean_iou))              
                 
             
             #print("iteration: {}/{} ".format(seq,iters_per_epoch))
