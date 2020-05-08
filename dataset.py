@@ -1,27 +1,33 @@
 import os
-import os.path as osp
+import os.path
 import numpy as np
 from PIL import Image
 
 import torch
-import torchvision
+#import torchvision
 from torch.utils import data
 
 import glob
 import random
+import json
+from easydict import EasyDict as edict
 
 class Youtube_MO_Train(data.Dataset):
     
     def __init__(self, root, imset='2017/train.txt', resolution='480p', single_object=False):
+        root = '../rvos-master/databases/YouTubeVOS/train'
+        imset = 'train-train-meta.json'
         self.root = root
-        self.mask_dir = os.path.join(root, 'Annotations', resolution)
-        self.mask480_dir = os.path.join(root, 'Annotations', '480p')
-        self.image_dir = os.path.join(root, 'JPEGImages', resolution)
-        _imset_dir = os.path.join(root, 'ImageSets')
+        self.mask_dir = os.path.join(root, 'Annotations')
+        self.mask480_dir = os.path.join(root, 'Annotations')
+        self.image_dir = os.path.join(root, 'JPEGImages')
+        _imset_dir = os.path.join(root)
         _imset_f = os.path.join(_imset_dir, imset)
         
         self.videos = []
         self.num_frames = {}
+        self.frame_paths = {}
+        self.mask_paths = {}
         self.num_objects = {}
         self.shape = {}
         self.size_480p = {}
@@ -30,19 +36,15 @@ class Youtube_MO_Train(data.Dataset):
         self.fixed_size = (100, 100) #(384,384)
         idx = 0
         
-        with open(os.path.join(_imset_f), "r") as lines:
-            for line in lines:
-                _video = line.rstrip('\n')
+        with open(_imset_f) as json_file:
+            json_data = edict(json.load(json_file))
+            for _video in json_data.videos.keys():
                 self.videos.append(_video)
-                self.num_frames[_video] = len(glob.glob(os.path.join(self.image_dir, _video, '*.jpg')))
-                _mask = np.array(Image.open(os.path.join(self.mask_dir, _video, '00000.png')).convert("P"))
-                #_mask:  (480, 854)
-                self.num_objects[_video] = np.max(_mask)
-                #self.shape[_video] = np.shape(_mask)
+                self.frame_paths[_video] = glob.glob(os.path.join(self.image_dir, _video, '*.jpg'))
+                self.num_frames[_video] = len(self.frame_paths[_video])
+                self.mask_paths[_video] = glob.glob(os.path.join(self.mask_dir, _video, '*.png'))
+                self.num_objects[_video] = len(json_data.videos[_video].objects)
                 self.shape[_video] = self.fixed_size
-                _mask480 = np.array(Image.open(os.path.join(self.mask480_dir, _video, '00000.png')).convert("P"))
-                #_mask480:  (480, 854)
-                #self.size_480p[_video] = np.shape(_mask480)
                 self.size_480p[_video] = self.fixed_size
                 
                 #starts from 2 so that there are at least 2 frames before
@@ -71,12 +73,14 @@ class Youtube_MO_Train(data.Dataset):
         #for f in range(self.num_frames[video]):
         for idx, f in enumerate(train_triplet):
             #print('index: {}, triplet: {}, name: {}'.format(index, train_triplet, video))
-            img_file = os.path.join(self.image_dir, video, '{:05d}.jpg'.format(f))
+            #img_file = os.path.join(self.image_dir, video, '{:05d}.jpg'.format(f))
+            img_file = self.frame_paths[video][f]
             N_frames[idx], coord = self.crop_frames(Image.open(img_file).convert('RGB'))
             #sem crop: N_frames[idx]:  (480, 854, 3)
             #com crop: N_frames[idx]:  (384, 384, 3)
             try:
-                mask_file = os.path.join(self.mask_dir, video, '{:05d}.png'.format(f))  
+                #mask_file = os.path.join(self.mask_dir, video, '{:05d}.png'.format(f)) 
+                mask_file = self.mask_paths[video][f]
                 N_masks[idx], coord = self.crop_frames(Image.open(mask_file).convert('P'), coord)
             except:
                 # print('a')
@@ -182,7 +186,7 @@ class DAVIS_MO_Train(data.Dataset):
         self.image_dir = os.path.join(root, 'JPEGImages', resolution)
         _imset_dir = os.path.join(root, 'ImageSets')
         _imset_f = os.path.join(_imset_dir, imset)
-        
+
         self.videos = []
         self.num_frames = {}
         self.num_objects = {}

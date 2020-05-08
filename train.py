@@ -18,7 +18,7 @@ from tensorboardX import SummaryWriter
 import logging
 import time
 ### My libs
-from dataset import DAVIS_MO_Train, DAVIS_MO_Val
+from dataset import DAVIS_MO_Train, DAVIS_MO_Val, Youtube_MO_Train
 from model import STM
 from helpers import *
 
@@ -98,9 +98,13 @@ def run_train():
     train_batch_size = num_devices
     val_batch_size = 12
     
-    # data loader
+    # DAVIS data loader
     Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    Trainloader = data.DataLoader(Trainset, batch_size=train_batch_size, shuffle=False, num_workers=2)
+    #Trainloader = data.DataLoader(Trainset, batch_size=train_batch_size, shuffle=False, num_workers=2)
+    
+    # Youtube data loader
+    youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    Trainloader = data.DataLoader(youtube_Trainset, batch_size=train_batch_size, shuffle=False, num_workers=2)
     
     Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     Valloader = data.DataLoader(Valset, batch_size=val_batch_size, shuffle=False, num_workers=4)
