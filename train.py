@@ -100,11 +100,11 @@ def run_train():
     
     # DAVIS data loader
     Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    #Trainloader = data.DataLoader(Trainset, batch_size=train_batch_size, shuffle=False, num_workers=2)
+    Trainloader = data.DataLoader(Trainset, batch_size=train_batch_size, shuffle=False, num_workers=1)
     
     # Youtube data loader
     youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    Trainloader = data.DataLoader(youtube_Trainset, batch_size=train_batch_size, shuffle=False, num_workers=1)
+    #Trainloader = data.DataLoader(youtube_Trainset, batch_size=train_batch_size, shuffle=False, num_workers=1)
     
     Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     Valloader = data.DataLoader(Valset, batch_size=val_batch_size, shuffle=False, num_workers=4)

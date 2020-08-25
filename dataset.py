@@ -13,6 +13,8 @@ import json
 from easydict import EasyDict as edict
 from torchsample.transforms import RandomAffine
 import matplotlib.pyplot as plt
+from skimage.morphology import disk
+from skimage.filters.rank import modal
 
 class Youtube_MO_Train(data.Dataset):
     
@@ -35,7 +37,7 @@ class Youtube_MO_Train(data.Dataset):
         self.size_480p = {}
         self.train_triplets = {}
         self.frame_skip = 5
-        self.fixed_size = (384,384) #(100, 100) # 
+        self.fixed_size = (100, 100) # (384,384) #(100, 100) # 
         self.affine_transf = RandomAffine(rotation_range=15, shear_range=10, zoom_range=(0.95, 1.05))
         idx = 0
         
@@ -59,7 +61,6 @@ class Youtube_MO_Train(data.Dataset):
         
 
     def __getitem__(self, index):
-        index = 3600
         video = self.train_triplets[index][0]
         #video = self.videos[index]
         info = {}
@@ -72,7 +73,6 @@ class Youtube_MO_Train(data.Dataset):
         #N_frames:  (3, 100, 100, 3)
         #N_masks:  (3, 100, 100)
         
-        #train_triplet = self.Skip_frames(self.train_triplets[index][1], self.num_frames[video])
         train_triplet =  Skip_frames(self.train_triplets[index][1], self.frame_skip, self.num_frames[video])
         #train_triplet = (3, 5, 9) -> frames: t=3, t=5, t=9
         
@@ -91,23 +91,27 @@ class Youtube_MO_Train(data.Dataset):
             #sem crop: N_masks[idx]:  (480, 854)
             #com crop: N_masks[idx]:  (384, 384)
             
-            ##############################
-            ff_frame = torch.from_numpy(np.array(N_frames[idx])).float().permute(2,0,1)
-            ff_mask = torch.from_numpy(np.array(N_masks[idx])).float().unsqueeze(0)
-            
+            # apply affine transforms
+            ff_frame = torch.from_numpy(N_frames[idx]).float().permute(2,0,1) #ff_frame:  torch.Size([3, 384, 384])
+            ff_mask = torch.from_numpy(N_masks[idx]).float().unsqueeze(0) #ff_mask:  torch.Size([1, 384, 384])
             ff_frame, ff_mask = self.affine_transf(ff_frame, ff_mask)
-
-            ff = plt.figure()
-            ff.add_subplot(2,2,1)
-            plt.imshow(N_frames[idx])
-            ff.add_subplot(2,2,2)
-            plt.imshow(ff_frame.permute(1,2,0))
-            ff.add_subplot(2,2,3)
-            plt.imshow(N_masks[idx])
-            ff.add_subplot(2,2,4)
-            plt.imshow(ff_mask[0])
-            plt.show(block=True) 
-            input("Press Enter to continue...")
+            N_frames[idx] = np.array(ff_frame.permute(1,2,0))
+            N_masks[idx] = modal(np.array(ff_mask[0]).astype(np.uint8), disk(5)) # modal function clean up some noise caused by affine_transf
+            #N_frames:  (3, 384, 384, 3) -> np.array
+            #N_masks:  (3, 384, 384) -> np.array            
+            
+            ##############################
+            # ff = plt.figure()
+            # ff.add_subplot(2,2,1)
+            # plt.imshow(N_frames[idx])
+            # ff.add_subplot(2,2,2)
+            # plt.imshow(ff_frame.permute(1,2,0))
+            # ff.add_subplot(2,2,3)
+            # plt.imshow(N_masks[idx])
+            # ff.add_subplot(2,2,4)
+            # plt.imshow(ff_mask[0].int())
+            # plt.show(block=True) 
+            # input("Press Enter to continue...")
             #############################
         
         Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
@@ -156,6 +160,7 @@ class DAVIS_MO_Train(data.Dataset):
         self.train_triplets = {}
         self.frame_skip = 5
         self.fixed_size = (100, 100) #(384,384)
+        self.affine_transf = RandomAffine(rotation_range=15, shear_range=10, zoom_range=(0.95, 1.05))
         idx = 0
         
         with open(os.path.join(_imset_f), "r") as lines:
@@ -193,7 +198,6 @@ class DAVIS_MO_Train(data.Dataset):
         #N_frames:  (3, 100, 100, 3)
         #N_masks:  (3, 100, 100)
         
-        #train_triplet = self.Skip_frames(self.train_triplets[index][1], self.num_frames[video])
         train_triplet =  Skip_frames(self.train_triplets[index][1], self.frame_skip, self.num_frames[video])
         #train_triplet = (3, 5, 9) -> frames: t=3, t=5, t=9
         
@@ -209,6 +213,15 @@ class DAVIS_MO_Train(data.Dataset):
                 N_masks[idx] = 255
             #sem crop: N_masks[idx]:  (480, 854)
             #com crop: N_masks[idx]:  (384, 384)
+                
+            # apply affine transforms
+            ff_frame = torch.from_numpy(N_frames[idx]).float().permute(2,0,1) #ff_frame:  torch.Size([3, 384, 384])
+            ff_mask = torch.from_numpy(N_masks[idx]).float().unsqueeze(0) #ff_mask:  torch.Size([1, 384, 384])
+            ff_frame, ff_mask = self.affine_transf(ff_frame, ff_mask)
+            N_frames[idx] = np.array(ff_frame.permute(1,2,0))
+            N_masks[idx] = modal(np.array(ff_mask[0]).astype(np.uint8), disk(5)) # modal function clean up some noise caused by affine_transf
+            #N_frames:  (3, 384, 384, 3) -> np.array
+            #N_masks:  (3, 384, 384) -> np.array 
         
         Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
         #Fs:  torch.Size([3, 3, 480, 854]) -> canais, frames, linhas, colunas
@@ -438,13 +451,13 @@ def Crop_frames(img, fixed_size, coord=None):
                 wpercent = (hsize/float(h))
                 wsize = int((float(w)*float(wpercent)))
             img = np.array(img.resize((wsize,hsize), Image.ANTIALIAS))/255.
-            
+             
             # crop
             w, h = img.shape[0], img.shape[1]
             new_w = (random.randrange(0, w - fix_w) if w > fix_w else 0)
             new_h = (random.randrange(0, h - fix_h) if h > fix_h else 0)
             new_img = img[new_w:new_w+fix_w, new_h:new_h+fix_h]
-            
+             
         else:
             # resize
             wsize, hsize, new_w, new_h = coord
