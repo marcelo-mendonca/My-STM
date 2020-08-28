@@ -129,7 +129,7 @@ def run_train():
             params += [{'params':[value]}]
     
     optimizer = torch.optim.Adam(params, lr=args.lr)
-    criterion = torch.nn.BCELoss()
+    #criterion = torch.nn.BCELoss() #replaced by functional cross entropy
     
     writer = SummaryWriter()
     start_epoch = 0
@@ -152,7 +152,7 @@ def run_train():
         state.update(checkpoint['model'])
         # load the new state dict
         model.load_state_dict(state)
-        # load optimizere state dict
+        # load optimizer state dict
         if 'optimizer' in checkpoint.keys():
             optimizer.load_state_dict(checkpoint['optimizer'])
         del checkpoint
@@ -177,8 +177,8 @@ def run_train():
             
             Fs, Ms, num_objects, info = V
             #batch_size = 4:
-            #Fs:  torch.Size([4, 3, 3, 100, 100])
-            #Ms:  torch.Size([4, 11, 3, 100, 100])
+            #Fs:  torch.Size([4, 3, 3, 384, 384])
+            #Ms:  torch.Size([4, 11, 3, 384, 384])
             #num_objects:  tensor([[1],[1],[1],[1]], device='cuda:0')
             
             # send input tensors to gpu
@@ -190,7 +190,7 @@ def run_train():
             loss = 0            
             Es = torch.zeros_like(Ms)
             Es[:,:,0] = Ms[:,:,0]
-            #Es:  torch.Size([4, 11, 3, 100, 100])
+            #Es:  torch.Size([4, 11, 3, 384, 384])
         
             #loop over the 3-1 frame+annotation samples (1st frame is used as reference)
             for t in range(1,3):
@@ -211,18 +211,31 @@ def run_train():
                 
                 # segment
                 logit = model(Fs[:,:,t], this_keys, this_values, torch.tensor([num_objects]))
-                #logit: torch.Size([4, 11, 480, 910])                
+                #logit: torch.Size([4, 11, 384, 384])                
                 
                 # compute probability maps for output
                 Es[:,:,t] = F.softmax(logit, dim=1)
+                #Es:  torch.Size([4, 11, 3, 384, 384])
                 
                 # update
                 keys, values = this_keys, this_values
                 
                 # compute loss
-                loss += criterion(Es[:,:,t].clone(), Ms[:,:,t].float()) / train_batch_size
-                #Es:  torch.Size([4, 11, 3, 480, 854])
-                #Ms:  torch.Size([4, 11, 3, 480, 854])
+                #loss += criterion(Es[:,:,t].clone(), Ms[:,:,t].float()) / train_batch_size  # replaced
+                loss += F.cross_entropy(logit, torch.argmax(Ms[:,:,t], dim=1))
+                #logit: torch.Size([4, 11, 384, 384])
+                #argmax(Ms[:,:,t], dim=1):  torch.Size([4, 384, 384])
+                
+                #############
+                
+                
+                if t == 2:
+                    torch.set_printoptions(profile="full")
+                    print('#argmax: \n\n', (torch.argmax(Ms[:,:,t], dim=1))[0])
+                    torch.set_printoptions(profile="default")
+                    #argmax:  torch.Size([1, 100, 100])
+                    #loss_CE = F.cross_entropy(logit, torch.argmax(Ms[:,:,n], dim=1))
+                    input('Press Enter button to continue...')
             
             # backprop
             if loss > 0:  
@@ -236,7 +249,8 @@ def run_train():
                 mean_iou = iou(Es[:,:,1:3], Ms[:,:,1:3])
                 writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
                 writer.add_scalar('Train/IOU', mean_iou, seq + epoch * iters_per_epoch)
-                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, mean_iou))              
+                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, mean_iou))   
+                
                 
             
             #print("iteration: {}/{} ".format(seq,iters_per_epoch))
