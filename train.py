@@ -98,14 +98,19 @@ def run_train():
     train_batch_size = num_devices
     val_batch_size = 12
     
-    # DAVIS data loader
-    Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    # DAVIS train dataset
+    davis_Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    
+    # Youtube train dataset
+    youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    
+    #concat both datasets
+    Trainset = data.ConcatDataset(5*[davis_Trainset]+[youtube_Trainset])
+    
+    #train data loader
     Trainloader = data.DataLoader(Trainset, batch_size=train_batch_size, shuffle=False, num_workers=1)
     
-    # Youtube data loader
-    youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    #Trainloader = data.DataLoader(youtube_Trainset, batch_size=train_batch_size, shuffle=False, num_workers=1)
-    
+    #validation dataset and loader
     Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     Valloader = data.DataLoader(Valset, batch_size=val_batch_size, shuffle=False, num_workers=4)
     
@@ -130,6 +135,7 @@ def run_train():
     
     optimizer = torch.optim.Adam(params, lr=args.lr)
     #criterion = torch.nn.BCELoss() #replaced by functional cross entropy
+    criterion = F.cross_entropy
     
     writer = SummaryWriter()
     start_epoch = 0
@@ -167,7 +173,8 @@ def run_train():
         print('[Train] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
          
         # increases maximum frame skip by 5 (range 5->25) after 20 epochs 
-        Trainset.Set_frame_skip(epoch)
+        davis_Trainset.Set_frame_skip(epoch)
+        youtube_Trainset.Set_frame_skip(epoch)
           
         for seq, V in enumerate(Trainloader):
             
@@ -222,20 +229,9 @@ def run_train():
                 
                 # compute loss
                 #loss += criterion(Es[:,:,t].clone(), Ms[:,:,t].float()) / train_batch_size  # replaced
-                loss += F.cross_entropy(logit, torch.argmax(Ms[:,:,t], dim=1))
+                loss += criterion(logit, torch.argmax(Ms[:,:,t], dim=1))
                 #logit: torch.Size([4, 11, 384, 384])
                 #argmax(Ms[:,:,t], dim=1):  torch.Size([4, 384, 384])
-                
-                #############
-                
-                
-                if t == 2:
-                    torch.set_printoptions(profile="full")
-                    print('#argmax: \n\n', (torch.argmax(Ms[:,:,t], dim=1))[0])
-                    torch.set_printoptions(profile="default")
-                    #argmax:  torch.Size([1, 100, 100])
-                    #loss_CE = F.cross_entropy(logit, torch.argmax(Ms[:,:,n], dim=1))
-                    input('Press Enter button to continue...')
             
             # backprop
             if loss > 0:  
@@ -249,8 +245,7 @@ def run_train():
                 mean_iou = iou(Es[:,:,1:3], Ms[:,:,1:3])
                 writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
                 writer.add_scalar('Train/IOU', mean_iou, seq + epoch * iters_per_epoch)
-                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, mean_iou))   
-                
+                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, mean_iou))                   
                 
             
             #print("iteration: {}/{} ".format(seq,iters_per_epoch))
@@ -274,46 +269,43 @@ def run_train():
 
 def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number=None):
     #model = STM()
-    #Fs:  torch.Size([1, 3, 69, 480, 910])
-    #Ms:  torch.Size([1, 11, 69, 480, 910])
-    #num_frames: 69
-    #num_objects:  2
     
     idx = 0
     next_change = 0
-    to_second_frame = False
     
     for seq, V in enumerate(Valloader):
                     
         ############# interrupção só para testar
         if seq > 4:
             break
-
         
         Fss, Mss, nums_objects, infos = V
         nums_frames = infos['num_frames']
-        #Fss:  torch.Size([4, 3, 1, 100, 100])
-        #Mss:  torch.Size([4, 11, 1, 100, 100])
+        #Fss:  torch.Size([12, 3, 1, 384, 384]) -> val_batch_size = 12
+        #Mss:  torch.Size([12, 11, 1, 384, 384]) -> val_batch_size = 12
         #nums_objects:  tensor([[1],[1],[1],[1]])
         #infos:  {'name': ['bear', 'bear', 'bear', 'bear'], 
-        #       'num_frames': tensor([82, 82, 82, 82]), 
-        #       'size_480p': [tensor([100, 100, 100, 100]), tensor([100, 100, 100, 100])]}    
+        #       'num_frames': tensor([82, 82, 82, 82])}    
         
         if torch.cuda.is_available():
             Fss = Fss.to(device)
             Mss = Mss.to(device)
             nums_objects = nums_objects.to(device)
-            
-        batch_size = int(Fss.size(0))                    
+        
+        batch_size = int(Fss.size(0)) 
+        Es = torch.zeros(Mss[0,:,0].shape).unsqueeze(dim=0).to(device)
+        #Es: torch.Size([1, 11, 384, 384])
+                
         for batch_idx in range(batch_size):                
             
-            Fs, Ms = Fss[batch_idx,:,0], Mss[batch_idx,:,0]
-            Fs = torch.unsqueeze(Fs, dim=0)
-            Ms = torch.unsqueeze(Ms, dim=0)
+            Fs = Fss[batch_idx,:,0].unsqueeze(dim=0)
+            Ms = Mss[batch_idx,:,0].unsqueeze(dim=0)
+            #Fs:  torch.Size([1, 3, 384, 384])
+            #Ms:  torch.Size([1, 11, 384, 384])
             num_objects = nums_objects[batch_idx]
             num_frames = nums_frames[batch_idx].item()
             
-            # New sequence begins
+            # New sequence begins (fist frame)
             if idx == next_change:
                 next_change += num_frames
                 if Mem_every:
@@ -322,51 +314,45 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
                     to_memorize = [int(round(i)) for i in np.linspace(idx, next_change, num=Mem_number+2)[:-1]]
                 else:
                     raise NotImplementedError
-                #Se mem_every=5, então to_memorize = [0, 5, 10, 15...]
+                #If mem_every = 5, then to_memorize = [0, 5, 10, 15...]
+                
+                Es = Ms
                 loss = 0                
                 first_frame = True
-                second_frame = False
-                to_second_frame = True
-            elif to_second_frame:
-                first_frame = False
-                second_frame = True
-                to_second_frame = False
             else:
                 first_frame = False
-                second_frame = False
-                to_second_frame = False        
-            
-            if not first_frame:
         
-                # memorize
-                with torch.no_grad():
-                    prev_key, prev_value = model(prev_Fs, prev_Ms, torch.tensor([num_objects]))
-                    #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 57])
-                    #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 57])
-         
-                if second_frame: # 
-                    this_keys, this_values = prev_key, prev_value # only prev memory
-                else:
-                    this_keys = torch.cat([keys, prev_key], dim=3)
-                    this_values = torch.cat([values, prev_value], dim=3)                
+            # memorize
+            with torch.no_grad():
+                prev_key, prev_value = model(Fs, Es, torch.tensor([num_objects]))
+                #prev_key(k4):  torch.Size([1, 11, 128, 1, 30, 57])
+                #prev_value(v4):  torch.Size([1, 11, 512, 1, 30, 57])
+     
+            if first_frame: # 
+                this_keys, this_values = prev_key, prev_value # only prev memory
+            else:
+                this_keys = torch.cat([keys, prev_key], dim=3)
+                this_values = torch.cat([values, prev_value], dim=3)
+                #this_keys:  torch.Size([1, 11, 128, 1, 7, 7])
+                #this_values:  torch.Size([1, 11, 512, 1, 7, 7])
 
-                # segment
-                with torch.no_grad():
-                    logit = model(Fs, this_keys, this_values, torch.tensor([num_objects]))
-                    #(t=39) logit: torch.Size([1, 11, 480, 910])
-                
-                    pred = F.softmax(logit, dim=1)
-                    #(t=39) Es: torch.Size([1, 11, 69, 480, 910])
+            # segment
+            with torch.no_grad():
+                logit = model(Fs, this_keys, this_values, torch.tensor([num_objects]))
+                #logit:  torch.Size([1, 11, 384, 384])
+            
+                if not first_frame:
+                    Es = F.softmax(logit, dim=1)
+                    #Es: torch.Size([1, 11, 384, 384])
                     
-                    # compute loss
-                    loss += criterion(pred, Ms.float())
+                # compute loss
+                loss += criterion(logit, torch.argmax(Ms, dim=1))
+                #torch.argmax(Ms, dim=1):  torch.Size([1, 384, 384])
                 
                 # update
-                if second_frame or idx in to_memorize:
+                if first_frame or idx in to_memorize:
                     keys, values = this_keys, this_values
                 
-            prev_Fs = Fs
-            prev_Ms = Ms
             idx += 1       
             print("[VAL] idx: {}, loss: {}".format(idx, loss))
             
