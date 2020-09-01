@@ -18,7 +18,7 @@ from tensorboardX import SummaryWriter
 import logging
 import time
 ### My libs
-from dataset import DAVIS_MO_Train, DAVIS_MO_Val, Youtube_MO_Train
+from dataset import DAVIS_MO_Train, DAVIS_MO_Val, Youtube_MO_Train, Youtube_MO_Val
 from model import STM
 from helpers import *
 
@@ -98,21 +98,23 @@ def run_train():
     train_batch_size = num_devices
     val_batch_size = 12
     
-    # DAVIS train dataset
+    # DAVIS trainset
     davis_Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     
-    # Youtube train dataset
-    youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    # Youtube trainset
+    youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', imset='train-train-meta.json', single_object=False)
     
-    #concat both datasets
+    #concat DAVIS + Youtube
     Trainset = data.ConcatDataset(5*[davis_Trainset]+[youtube_Trainset])
     
     #train data loader
     Trainloader = data.DataLoader(Trainset, batch_size=train_batch_size, shuffle=False, num_workers=1)
     
     #validation dataset and loader
-    Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    Valloader = data.DataLoader(Valset, batch_size=val_batch_size, shuffle=False, num_workers=4)
+    davis_Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    youtube_Valset = Youtube_MO_Val(DATA_ROOT, resolution='480p', imset='train-val-meta.json', single_object=False)
+    Valset = data.ConcatDataset(5*[davis_Valset]+[youtube_Valset])
+    Valloader = data.DataLoader(Valset, batch_size=val_batch_size, shuffle=False, num_workers=1)
     
     #Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     #Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=1)
@@ -183,21 +185,22 @@ def run_train():
                 break
             
             Fs, Ms, num_objects, info = V
+            Es = torch.zeros_like(Ms)
             #batch_size = 4:
             #Fs:  torch.Size([4, 3, 3, 384, 384])
             #Ms:  torch.Size([4, 11, 3, 384, 384])
             #num_objects:  tensor([[1],[1],[1],[1]], device='cuda:0')
+            #Es:  torch.Size([4, 11, 3, 384, 384])
             
             # send input tensors to gpu
             if torch.cuda.is_available():
                 Fs = Fs.to(device)
                 Ms = Ms.to(device)
                 num_objects = num_objects.to(device)
+                Es = Es.to(device)
             
             loss = 0            
-            Es = torch.zeros_like(Ms)
             Es[:,:,0] = Ms[:,:,0]
-            #Es:  torch.Size([4, 11, 3, 384, 384])
         
             #loop over the 3-1 frame+annotation samples (1st frame is used as reference)
             for t in range(1,3):
@@ -243,9 +246,9 @@ def run_train():
             #if (seq+1) % args.disp_interval == 0:
             if (seq+1) % 1 == 0:
                 mean_iou = iou(Es[:,:,1:3], Ms[:,:,1:3])
-                writer.add_scalar('Train/BCE', loss, seq + epoch * iters_per_epoch)
+                writer.add_scalar('Train/BCE', loss.item(), seq + epoch * iters_per_epoch)
                 writer.add_scalar('Train/IOU', mean_iou, seq + epoch * iters_per_epoch)
-                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss, mean_iou))                   
+                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss.item(), mean_iou))                   
                 
             
             #print("iteration: {}/{} ".format(seq,iters_per_epoch))
@@ -346,7 +349,7 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
                     #Es: torch.Size([1, 11, 384, 384])
                     
                 # compute loss
-                loss += criterion(logit, torch.argmax(Ms, dim=1))
+                loss += criterion(logit, torch.argmax(Ms, dim=1)).item()
                 #torch.argmax(Ms, dim=1):  torch.Size([1, 384, 384])
                 
                 # update

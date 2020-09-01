@@ -16,11 +16,12 @@ import matplotlib.pyplot as plt
 from skimage.morphology import disk
 from skimage.filters.rank import modal
 
-class Youtube_MO_Train(data.Dataset):
-    
-    def __init__(self, root, imset='2017/train.txt', resolution='480p', single_object=False):
-        root = '../rvos-master/databases/YouTubeVOS/train'
-        imset = 'train-train-meta.json'
+############################ YOUTUBE TRAIN ################################
+class Youtube_MO_Train(data.Dataset):    
+    def __init__(self, data_root, imset='train-train-meta.json', resolution='480p', single_object=False):
+        #../rvos-master/databases/YouTubeVOS/train
+        data_folder = 'YouTubeVOS/train'
+        root = os.path.join(data_root, data_folder)
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations')
         self.mask480_dir = os.path.join(root, 'Annotations')
@@ -62,7 +63,6 @@ class Youtube_MO_Train(data.Dataset):
 
     def __getitem__(self, index):
         video = self.train_triplets[index][0]
-        #video = self.videos[index]
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
@@ -99,20 +99,6 @@ class Youtube_MO_Train(data.Dataset):
             N_masks[idx] = modal(np.array(ff_mask[0]).astype(np.uint8), disk(5)) # modal function clean up some noise caused by affine_transf
             #N_frames:  (3, 384, 384, 3) -> np.array
             #N_masks:  (3, 384, 384) -> np.array            
-            
-            ##############################
-            # ff = plt.figure()
-            # ff.add_subplot(2,2,1)
-            # plt.imshow(N_frames[idx])
-            # ff.add_subplot(2,2,2)
-            # plt.imshow(ff_frame.permute(1,2,0))
-            # ff.add_subplot(2,2,3)
-            # plt.imshow(N_masks[idx])
-            # ff.add_subplot(2,2,4)
-            # plt.imshow(ff_mask[0].int())
-            # plt.show(block=True) 
-            # input("Press Enter to continue...")
-            #############################
         
         Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
         #Fs:  torch.Size([3, 3, 480, 854]) -> canais, frames, linhas, colunas
@@ -141,10 +127,12 @@ class Youtube_MO_Train(data.Dataset):
         if (epoch > 0) and (epoch % 20 == 0):
             self.frame_skip = min([self.frame_skip+5, 25])
 
-
-class DAVIS_MO_Train(data.Dataset):
-    
-    def __init__(self, root, imset='2017/train.txt', resolution='480p', single_object=False):
+############################ DAVIS TRAIN ################################
+class DAVIS_MO_Train(data.Dataset):    
+    def __init__(self, data_root, imset='2017/train.txt', resolution='480p', single_object=False):
+        #../rvos-master/databases/DAVIS2017
+        data_folder = 'DAVIS2017'
+        root = os.path.join(data_root, data_folder)
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations', resolution)
         self.mask480_dir = os.path.join(root, 'Annotations', '480p')
@@ -187,7 +175,6 @@ class DAVIS_MO_Train(data.Dataset):
 
     def __getitem__(self, index):
         video = self.train_triplets[index][0]
-        #video = self.videos[index]
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
@@ -234,8 +221,7 @@ class DAVIS_MO_Train(data.Dataset):
             Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
             #Ms:  torch.Size([11, 3, 480, 854]) -> canais, frames, linhas, colunas
             num_objects = torch.LongTensor([int(self.num_objects[video])])
-            return Fs, Ms, num_objects, info
-            
+            return Fs, Ms, num_objects, info            
             #Chega pelo dataloader lá na chamada com uma dimensao extra:
             #Fs:  torch.Size([1, 3, 3, 480, 854])
             #Ms:  torch.Size([1, 11, 3, 480, 854])
@@ -251,10 +237,100 @@ class DAVIS_MO_Train(data.Dataset):
         if (epoch > 0) and (epoch % 20 == 0):
             self.frame_skip = min([self.frame_skip+5, 25])
             
+############################ YOUTUBE VALIDATION ###############################
+class Youtube_MO_Val(data.Dataset):    
+    def __init__(self, data_root, imset='train-val-meta.json', resolution='480p', single_object=False):
+        #../rvos-master/databases/YouTubeVOS/train
+        data_folder = 'YouTubeVOS/train'
+        root = os.path.join(data_root, data_folder)
+        self.root = root
+        self.mask_dir = os.path.join(root, 'Annotations')
+        self.mask480_dir = os.path.join(root, 'Annotations')
+        self.image_dir = os.path.join(root, 'JPEGImages')
+        _imset_dir = os.path.join(root)
+        _imset_f = os.path.join(_imset_dir, imset)
+        
+        self.videos = []
+        self.num_frames = {}
+        self.frame_paths = {}
+        self.mask_paths = {}
+        self.num_objects = {}
+        self.shape = {}
+        self.size_480p = {}
+        self.batch_frames = {}
+        self.frame_skip = 5
+        self.fixed_size = (100, 100) #(384,384)
+        idx = 0 
+        
+        with open(_imset_f) as json_file:
+            json_data = edict(json.load(json_file))
+            for _video in json_data.videos.keys():
+                self.videos.append(_video)
+                self.frame_paths[_video] = glob.glob(os.path.join(self.image_dir, _video, '*.jpg'))
+                self.num_frames[_video] = len(self.frame_paths[_video])
+                self.mask_paths[_video] = glob.glob(os.path.join(self.mask_dir, _video, '*.png'))
+                self.num_objects[_video] = len(json_data.videos[_video].objects)
+                self.shape[_video] = self.fixed_size
+                self.size_480p[_video] = self.fixed_size
+                
+                #starts from 0 to get all frames in sequence
+                for f in range(self.num_frames[_video]):
+                    self.batch_frames[idx] = (_video, f)
+                    idx += 1
+        
+        self.K = 11
+        self.single_object = single_object
 
-class DAVIS_MO_Val(data.Dataset):
+    def __getitem__(self, index):
+        video = self.batch_frames[index][0]
+        info = {}
+        info['name'] = video
+        info['num_frames'] = self.num_frames[video]
+        info['size_480p'] = self.size_480p[video]
+
+        N_frames = np.empty((1,)+self.shape[video]+(3,), dtype=np.float32)
+        N_masks = np.empty((1,)+self.shape[video], dtype=np.uint8)
+        #N_frames:  (1, 384, 384, 3) -> frames, w, h, ch
+        #N_masks:  (1, 384, 384) -> frames, w, h
+        
+        frame_idx = self.batch_frames[index][1]
+        img_file = self.frame_paths[video][frame_idx]
+        N_frames[0], coord = Crop_frames(Image.open(img_file).convert('RGB'), self.fixed_size)
+        
+        try:
+            mask_file = self.mask_paths[video][frame_idx]
+            N_masks[0], coord = Crop_frames(Image.open(mask_file).convert('P'), self.fixed_size, coord)
+        except:
+            N_masks[0] = 255
+        
+        Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
+        #Fs:  torch.Size([3, 3, 480, 854]) -> canais, frames, linhas, colunas
+        if self.single_object:
+            N_masks = (N_masks > 0.5).astype(np.uint8) * (N_masks < 255).astype(np.uint8)
+            Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
+            num_objects = torch.LongTensor([int(1)])
+            return Fs, Ms, num_objects, info
+        else:
+            Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
+            #Ms:  torch.Size([11, 3, 480, 854]) -> canais, frames, linhas, colunas
+            num_objects = torch.LongTensor([int(self.num_objects[video])])
+            return Fs, Ms, num_objects, info            
+            #Chega pelo dataloader lá na chamada com uma dimensao extra:
+            #Fs:  torch.Size([1, 3, 3, 480, 854])
+            #Ms:  torch.Size([1, 11, 3, 480, 854])
+            #num_objects:  tensor([[2]])
+            #info:  {'name': ['bike-packing'], 'num_frames': tensor([69]), 
+            #   'size_480p': [tensor([480]), tensor([854])]}
     
-    def __init__(self, root, imset='2017/train.txt', resolution='480p', single_object=False):
+    def __len__(self):
+        return len(self.batch_frames)
+    
+############################ DAVIS VALIDATION ################################
+class DAVIS_MO_Val(data.Dataset):
+    def __init__(self, data_root, imset='2017/val.txt', resolution='480p', single_object=False):
+        #../rvos-master/databases/DAVIS2017
+        data_folder = 'DAVIS2017'
+        root = os.path.join(data_root, data_folder)
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations', resolution)
         self.mask480_dir = os.path.join(root, 'Annotations', '480p')
@@ -296,7 +372,6 @@ class DAVIS_MO_Val(data.Dataset):
 
     def __getitem__(self, index):
         video = self.batch_frames[index][0]
-        #video = self.videos[index]
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
@@ -328,8 +403,7 @@ class DAVIS_MO_Val(data.Dataset):
             Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
             #Ms:  torch.Size([11, 3, 480, 854]) -> canais, frames, linhas, colunas
             num_objects = torch.LongTensor([int(self.num_objects[video])])
-            return Fs, Ms, num_objects, info
-            
+            return Fs, Ms, num_objects, info            
             #Chega pelo dataloader lá na chamada com uma dimensao extra:
             #Fs:  torch.Size([1, 3, 3, 480, 854])
             #Ms:  torch.Size([1, 11, 3, 480, 854])
@@ -340,10 +414,9 @@ class DAVIS_MO_Val(data.Dataset):
     def __len__(self):
         return len(self.batch_frames)
     
-
+############################ DAVIS TEST ################################
 class DAVIS_MO_Test(data.Dataset):
     # for multi object, do shuffling
-
     def __init__(self, root, imset='2017/train.txt', resolution='480p', single_object=False):
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations', resolution)
@@ -418,7 +491,7 @@ class DAVIS_MO_Test(data.Dataset):
             return Fs, Ms, num_objects, info
         
 
-
+############################ AUX FUNCTIONS ################################
 def To_onehot(mask, K):
     M = np.zeros((K, mask.shape[0], mask.shape[1]), dtype=np.uint8)
     #M:  (11, 480, 854)
