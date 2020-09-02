@@ -172,16 +172,19 @@ def run_train():
         
         # training
         model.eval() #set eval mode to disable batchnorm and dropout
-        print('[Train] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
+        print('[Train] Epoch {}{}{}'.format(font.BOLD, epoch+1, font.END))
          
         # increases maximum frame skip by 5 (range 5->25) after 20 epochs 
         davis_Trainset.Set_frame_skip(epoch)
         youtube_Trainset.Set_frame_skip(epoch)
+        
+        running_loss = 0.0
+        mean_iou = 0.0
           
         for seq, V in enumerate(Trainloader):
             
             ############# interrupção só para testar
-            if seq > 4:
+            if seq > 99:
                 break
             
             Fs, Ms, num_objects, info = V
@@ -199,7 +202,7 @@ def run_train():
                 num_objects = num_objects.to(device)
                 Es = Es.to(device)
             
-            loss = 0            
+            loss = 0.0            
             Es[:,:,0] = Ms[:,:,0]
         
             #loop over the 3-1 frame+annotation samples (1st frame is used as reference)
@@ -235,23 +238,25 @@ def run_train():
                 loss += criterion(logit, torch.argmax(Ms[:,:,t], dim=1))
                 #logit: torch.Size([4, 11, 384, 384])
                 #argmax(Ms[:,:,t], dim=1):  torch.Size([4, 384, 384])
-            
+                
             # backprop
             if loss > 0:  
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                
+            
+            #compute intersection over union (iou)
+            mean_iou += iou(Es[:,:,1:3], Ms[:,:,1:3])
+            running_loss += loss.item()
+            
             # logging and display
             #if (seq+1) % args.disp_interval == 0:
-            if (seq+1) % 1 == 0:
-                mean_iou = iou(Es[:,:,1:3], Ms[:,:,1:3])
-                writer.add_scalar('Train/BCE', loss.item(), seq + epoch * iters_per_epoch)
-                writer.add_scalar('Train/IOU', mean_iou, seq + epoch * iters_per_epoch)
-                print('[TRAIN] idx: {}, loss: {}, iou: {}'.format(seq, loss.item(), mean_iou))                   
-                
-            
-            #print("iteration: {}/{} ".format(seq,iters_per_epoch))
+            if (seq+1) % 10 == 0:                
+                writer.add_scalar('Train/LOSS', running_loss/10, seq + epoch * iters_per_epoch)
+                writer.add_scalar('Train/IOU', mean_iou/10, seq + epoch * iters_per_epoch)
+                print('[TRAIN] idx: %d, loss: %.3f, iou: %.3f' % (seq+1, running_loss/10, mean_iou/10))
+                running_loss = 0.0
+                mean_iou = 0.0                   
             
         # saving checkpoint    
         if epoch % 10 == 0 and epoch > 0:
@@ -263,7 +268,7 @@ def run_train():
         # validation
         if epoch % args.eval_epoch == 0:
             with torch.no_grad():
-                print('[Val] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
+                print('[Val] Epoch {}{}{}'.format(font.BOLD, epoch+1, font.END))
                 model.eval()
                 run_validate(model, criterion, Valloader, device, Mem_every=5, Mem_number=None)
                 print('  - complete!')     
@@ -279,7 +284,7 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
     for seq, V in enumerate(Valloader):
                     
         ############# interrupção só para testar
-        if seq > 4:
+        if seq > 20:
             break
         
         Fss, Mss, nums_objects, infos = V
@@ -320,7 +325,8 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
                 #If mem_every = 5, then to_memorize = [0, 5, 10, 15...]
                 
                 Es = Ms
-                loss = 0                
+                loss = 0.0       
+                mean_iou = 0.0
                 first_frame = True
             else:
                 first_frame = False
@@ -341,27 +347,30 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
 
             # segment
             with torch.no_grad():
-                logit = model(Fs, this_keys, this_values, torch.tensor([num_objects]))
-                #logit:  torch.Size([1, 11, 384, 384])
-            
+                
                 if not first_frame:
+                    logit = model(Fs, this_keys, this_values, torch.tensor([num_objects]))
+                    #logit:  torch.Size([1, 11, 384, 384])            
+               
                     Es = F.softmax(logit, dim=1)
                     #Es: torch.Size([1, 11, 384, 384])
                     
-                # compute loss
-                loss += criterion(logit, torch.argmax(Ms, dim=1)).item()
-                #torch.argmax(Ms, dim=1):  torch.Size([1, 384, 384])
+                    # compute loss
+                    loss += criterion(logit, torch.argmax(Ms, dim=1)).item()
+                    #torch.argmax(Ms, dim=1):  torch.Size([1, 384, 384])
+                    
+                    #compute intersection over union (iou)
+                    mean_iou += iou(Es.unsqueeze(2), Ms.unsqueeze(2))
                 
                 # update
                 if first_frame or idx in to_memorize:
                     keys, values = this_keys, this_values
+            
+            if idx == next_change - 1: #last frame of the sequence
+                print("[VAL] idx: %d, loss: %.3f, iou: %.3f" % (idx+1, loss/(num_frames-1), mean_iou/(num_frames-1)))  
                 
             idx += 1       
-            print("[VAL] idx: {}, loss: {}".format(idx, loss))
             
-        if idx == next_change:
-            loss /= num_frames-1
-            print('val loss: {}'.format(loss))        
     
         
 if __name__ == "__main__":
