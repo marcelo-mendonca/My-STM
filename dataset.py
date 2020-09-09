@@ -21,7 +21,10 @@ class Youtube_MO_Train(data.Dataset):
     def __init__(self, data_root, imset='train-train-meta.json', resolution='480p', single_object=False):
         #../rvos-master/databases/YouTubeVOS/train
         data_folder = 'YouTubeVOS/train'
-        root = os.path.join(data_root, data_folder)
+        root = os.path.join(data_root, data_folder)        
+        if not os.path.isdir(root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations')
         self.mask480_dir = os.path.join(root, 'Annotations')
@@ -132,7 +135,10 @@ class DAVIS_MO_Train(data.Dataset):
     def __init__(self, data_root, imset='2017/train.txt', resolution='480p', single_object=False):
         #../rvos-master/databases/DAVIS2017
         data_folder = 'DAVIS2017'
-        root = os.path.join(data_root, data_folder)
+        root = os.path.join(data_root, data_folder)        
+        if not os.path.isdir(root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations', resolution)
         self.mask480_dir = os.path.join(root, 'Annotations', '480p')
@@ -243,6 +249,9 @@ class Youtube_MO_Val(data.Dataset):
         #../rvos-master/databases/YouTubeVOS/train
         data_folder = 'YouTubeVOS/train'
         root = os.path.join(data_root, data_folder)
+        if not os.path.isdir(root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations')
         self.mask480_dir = os.path.join(root, 'Annotations')
@@ -331,6 +340,9 @@ class DAVIS_MO_Val(data.Dataset):
         #../rvos-master/databases/DAVIS2017
         data_folder = 'DAVIS2017'
         root = os.path.join(data_root, data_folder)
+        if not os.path.isdir(root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        
         self.root = root
         self.mask_dir = os.path.join(root, 'Annotations', resolution)
         self.mask480_dir = os.path.join(root, 'Annotations', '480p')
