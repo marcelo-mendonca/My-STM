@@ -19,7 +19,7 @@ import glob
 import random
 import json
 from easydict import EasyDict as edict
-from torchsample.transforms import RandomAffine, RandomCrop, ToTensor, ChannelsFirst
+from torchsample.transforms import RandomAffine, RandomCrop, ToTensor, ChannelsFirst, AddChannel
 from torchsample.transforms import ChannelsLast, Compose, RandomBrightness, RangeNormalize, TypeCast
 import matplotlib.pyplot as plt
 from skimage.morphology import disk
@@ -79,10 +79,13 @@ bg_affine = RandomAffine(rotation_range=20, shear_range=10, zoom_range=(0.9, 1.1
 bg_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), RangeNormalize(0, 1), 
                      RandomBrightness(-0.2,0.2), bg_affine, RandomCrop(coco_bg.fixed_size), ChannelsLast()])
 
-fg_affine = RandomAffine(rotation_range=20, shear_range=10, zoom_range=(0.9, 1.1))
+fg_affine = RandomAffine(rotation_range=90, shear_range=10, zoom_range=(0.5, 1.5))
 
-fg_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), 
-                     RangeNormalize(0, 1), fg_affine, ChannelsLast()])
+fg_rgb_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), 
+                     RangeNormalize(0, 1), RandomBrightness(-0.2,0.2)])
+
+fg_mask_transf = Compose([ToTensor(), AddChannel(axis=0), TypeCast('float'), 
+                          RangeNormalize(0, 1)])
 
 ################### Pascal VOC #####################
 class VOC_dataset(data.Dataset):
@@ -135,100 +138,124 @@ class VOC_dataset(data.Dataset):
 
 ############################ AUX FUNCTIONS ################################
 
-def make_triplet2(fg_frame, fg_mask, num_objects, bg=None, triplet_size=(384,384)):
-    print('make triplet 2')
- 
+def make_triplet2(fg_frame, fg_mask, num_objects, bg=None, triplet_size=(384,384)): 
     
-    teste = make_bg_triplet(bg, triplet_size)
+    bg_triplet = make_bg_triplet(bg, triplet_size)
     
-    _, _, n = make_fg_triplet(fg_frame, fg_mask, num_objects)
+    N_frames, N_masks, num_objects = make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet)
     
     ff = plt.figure()
-    ff.add_subplot(2,2,1)
-    plt.imshow(bg)
-    ff.add_subplot(2,2,2)
-    plt.imshow(teste[0])
-    ff.add_subplot(2,2,3)
-    plt.imshow(teste[1])
-    ff.add_subplot(2,2,4)
-    plt.imshow(teste[2])
+    ff.add_subplot(2,3,1)
+    plt.imshow(N_frames[0])
+    ff.add_subplot(2,3,2)
+    plt.imshow(N_frames[1])
+    ff.add_subplot(2,3,3)
+    plt.imshow(N_frames[2])
+    ff.add_subplot(2,3,4)
+    plt.imshow(N_masks[0])
+    ff.add_subplot(2,3,5)
+    plt.imshow(N_masks[1])
+    ff.add_subplot(2,3,6)
+    plt.imshow(N_masks[2])
     plt.show(block=True) 
-    input("Press Enter to continue...")  
+    input("Press Enter to continue...")   
     
     
     return        
 
-def make_fg_triplet(fg_frame, fg_mask, num_objects, max_objects=3, triplet_size=(384,384)):
-    
-    w, h = triplet_size[0], triplet_size[1]
-    
-    print('FG_frame: ', fg_frame.shape)
-    print('Num_objects antes: ', num_objects)    
+def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects=3, triplet_size=(384,384)):  
     
     sorted_objects = random.sample(range(1,num_objects+1),min(num_objects,max_objects))
-    print('sorted objects: ', sorted_objects)
     num_objects = len(sorted_objects)
-    print('Num_objects depois: ', num_objects)
       
-    N_frames = np.empty((3,)+triplet_size+(3,), dtype=np.uint8)
-    N_masks = np.empty((3,)+triplet_size, dtype=np.uint8)
-    print('N frames: ', N_frames.shape)
-    print('N masks: ', N_masks.shape)    
+    N_frames = torch.zeros(3, triplet_size[0], triplet_size[1], 3)
+    N_masks = torch.zeros(3, triplet_size[0], triplet_size[1]) 
     
+    if bg_triplet is not None:
+        N_frames = bg_triplet
     
-    for k in range(num_objects):
+    for k in random.sample(range(num_objects),num_objects):
         
         obj_mask = (fg_mask == sorted_objects[k]).astype(np.uint8)      
 
-        obj_pixels = obj_mask[:,:,None] * fg_frame
+        obj_rgb = obj_mask[:,:,None] * fg_frame
         
         rmin, rmax, cmin, cmax = bbox2(obj_mask)
         
-        obj_pixels = obj_pixels[rmin : rmax, cmin : cmax]
+        obj_rgb = obj_rgb[rmin : rmax, cmin : cmax]
         
         obj_mask = obj_mask[rmin : rmax, cmin : cmax]
         
-        print('obj pixels shape: {}, rmax-rmin: {}, cmax-cmin: {}'.format(obj_pixels.shape, rmax-rmin, cmax-cmin))
+        #pad with 100 pixels (50 by side)
+        obj_rgb = img_pad(obj_rgb, 100)
+        obj_mask = img_pad(obj_mask, 100)        
+ 
         
-        size = (rmax-rmin+100, cmax-cmin+100)
-        print('len size: ', len(size))
-
+        global fg_rgb_transf
+        global fg_mask_transf
+        global fg_affine
         
-        print('len obj pix: ', len(obj_pixels.shape))
-        pad_obj_pixels = img_pad(obj_pixels, 100)
-        pad_obj_mask = img_pad(obj_mask, 100)
-        
-        
-        size = (rmax-rmin, cmax-cmin)
-
-        new_pad_obj_pixels = img_unpad(pad_obj_pixels, 100)
-        new_pad_obj_mask = img_unpad(pad_obj_mask, 100)
+        transf_obj_rgb = fg_rgb_transf(obj_rgb)
+        transf_obj_mask = fg_mask_transf(obj_mask)
         
         
-        for t in range(3):
+        obj_rgb_triplet = ChannelsLast()(transf_obj_rgb)
+        obj_mask_triplet = ChannelsLast()(transf_obj_mask)[:,:,0]
+        
+        N_frames[0], N_masks[0] = random_paste(N_frames[0], N_masks[0], obj_rgb_triplet, obj_mask_triplet*(k+1), 100)
+        
+        for t in range(1,3):
             
-            frame_canvas = np.zeros(triplet_size+(3,), dtype=np.uint8)
-            mask_canvas = np.zeros(triplet_size, dtype=np.uint8)
+            new_obj_rgb, new_obj_mask = fg_affine(transf_obj_rgb, transf_obj_mask)
             
+            obj_rgb_triplet = ChannelsLast()(new_obj_rgb)
+            obj_mask_triplet = ChannelsLast()(new_obj_mask).ceil()[:,:,0]
             
-
-        
-        ff = plt.figure()
-        ff.add_subplot(2,2,1)
-        plt.imshow(new_pad_obj_pixels)
-        ff.add_subplot(2,2,2)
-        plt.imshow(new_pad_obj_mask)
-        ff.add_subplot(2,2,3)
-        plt.imshow(pad_obj_pixels)
-        ff.add_subplot(2,2,4)
-        plt.imshow(pad_obj_mask)
-        plt.show(block=True) 
-        input("Press Enter to continue...")  
+            N_frames[t], N_masks[t] = random_paste(N_frames[t], N_masks[t], obj_rgb_triplet, obj_mask_triplet*(k+1), 100)
     
-    fg_frames = torch.zeros(3, w, h, 3)
-    fg_masks = torch.zeros(3, w, h)
     
-    return fg_frames, fg_masks, num_objects
+    return N_frames, N_masks, num_objects
+
+def random_paste(frame_canvas, mask_canvas, frame, mask, wpad, hpad=None):
+    
+    if hpad is None:
+        hpad = wpad
+        
+    w_canvas, h_canvas = frame_canvas.shape[0], frame_canvas.shape[1]
+    w_paste, h_paste = frame.shape[0], frame.shape[1]
+    
+    w_canvas_pos = random.randint(0, max(0, w_canvas - w_paste + wpad))
+    h_canvas_pos = random.randint(0, max(0, h_canvas - h_paste + hpad))
+    
+    w_canvas_ini = max(0, w_canvas_pos - wpad//2)
+    h_canvas_ini = max(0, h_canvas_pos - hpad//2)
+    
+    w_canvas_fin = min(w_canvas, w_canvas_pos + w_paste - wpad//2)
+    h_canvas_fin = min(h_canvas, h_canvas_pos + h_paste - hpad//2)
+    
+    w_paste_pos_R = w_canvas_fin - w_canvas_pos
+    h_paste_pos_R = h_canvas_fin - h_canvas_pos
+    
+    w_paste_pos_L = w_canvas_pos - w_canvas_ini
+    h_paste_pos_L = h_canvas_pos - h_canvas_ini
+    
+    w_paste_ini = wpad//2 - w_paste_pos_L
+    h_paste_ini = hpad//2 - h_paste_pos_L
+    
+    w_paste_fin = wpad//2 + w_paste_pos_R
+    h_paste_fin = hpad//2 + h_paste_pos_R
+    
+    wci, wcf, hci, hcf = w_canvas_ini, w_canvas_fin, h_canvas_ini, h_canvas_fin
+    wpi, wpf, hpi, hpf = w_paste_ini, w_paste_fin, h_paste_ini, h_paste_fin
+    
+    frame_canvas[wci:wcf, hci:hcf] = frame_canvas[wci:wcf, hci:hcf] * ~(mask[wpi:wpf, hpi:hpf, None] > 0)    
+    frame_canvas[wci:wcf, hci:hcf] = frame_canvas[wci:wcf, hci:hcf] + frame[wpi:wpf, hpi:hpf] * (mask[wpi:wpf, hpi:hpf, None] > 0)
+    
+    mask_canvas[wci:wcf, hci:hcf] = mask_canvas[wci:wcf, hci:hcf] * ~(mask[wpi:wpf, hpi:hpf] > 0)    
+    mask_canvas[wci:wcf, hci:hcf] = mask_canvas[wci:wcf, hci:hcf] + mask[wpi:wpf, hpi:hpf]    
+    
+    return frame_canvas, mask_canvas
+ 
 
 def img_unpad(img, wpad, hpad=None):    
     
@@ -292,12 +319,8 @@ def make_bg_triplet(bg=None, triplet_size=(384,384)):
         global coco_bg_cycle
         bg, _, _ = next(coco_bg_cycle)
     
-    print('make_triplet bg shape ANTES: ', bg.shape)
-    
     #resize background sides to be at least the same size of canvas sides
     bg = resize_keeping_aspect_ratio(bg, new_size=triplet_size)   
-    
-    print('make_triplet bg shape DEPOIS: ', bg.shape)
         
     bg_frames = torch.zeros(3, triplet_size[0], triplet_size[1], 3)
     
@@ -308,87 +331,6 @@ def make_bg_triplet(bg=None, triplet_size=(384,384)):
     
     
     return bg_frames
-
-def make_triplet(fg_frame, fg_mask, num_objects, bg=None, img_size=(384,384)):    
-    
-    #get background image
-    if not bg.any():
-        global coco_bg_cycle
-        bg, bg_w, bg_h = next(coco_bg_cycle)
-    else:
-        bg_w, bg_h = bg.shape[0], bg.shape[1]
-        
-    print('make_triplet bg shape ANTES: ', bg.shape)
-    
-    #resize background sides to be at least 25% greater than canvas
-    new_bg = Image.fromarray(bg)
-    w, h = img_size[0], img_size[1]    
-    if (bg_w - w < w/4) or (bg_h - h < h/4):   
-        if bg_w <= bg_h:
-            wsize = int(w + w/4)
-            wpercent = (wsize/float(bg_w))
-            hsize = int((float(bg_h)*float(wpercent)))                
-        else:
-            hsize = int(h + h/4)
-            wpercent = (hsize/float(bg_h))
-            wsize = int((float(bg_w)*float(wpercent)))
-        new_bg = new_bg.resize((hsize,wsize), Image.ANTIALIAS)
-        #bg = np.asarray(bg)   
-    
-    print('make_triplet bg shape DEPOIS: ', new_bg.size)
-    
-    
-    print('Num_objects: ', num_objects)    
-    N_masks = np.empty((3,)+fg_mask.shape, dtype=np.uint8)
-    if num_objects > 3:        
-        for k in range(3):
-            N_masks[k] = fg_mask == k+1            
-            num_objects = 3    
-    else:
-        for k in range(num_objects):
-            N_masks[k] = fg_mask == k+1
-    
-    frame_canvas = Image.new(mode='RGB', size=img_size)
-    mask_canvas = Image.new(mode='P', size=img_size)
-    
-    print('N_masks: ', N_masks.shape)
-    print('frame_canvas: ', frame_canvas.size)
-    print('mask_canvas: ', mask_canvas.size)
-    
-    frame_canvas.paste(new_bg)
-    new_fg_frame = Image.fromarray(fg_frame)
-    used_mask = Image.fromarray(N_masks[0]*255)
-    frame_canvas.paste(new_fg_frame,(0,0),used_mask)
-    new_bg.paste(frame_canvas, (100,100))
-    
-    
-    ff = plt.figure()
-    ff.add_subplot(2,2,1)
-    plt.imshow(frame_canvas)
-    ff.add_subplot(2,2,2)
-    plt.imshow(new_bg)
-    ff.add_subplot(2,2,3)
-    plt.imshow(used_mask)
-    ff.add_subplot(2,2,4)
-    plt.imshow(new_fg_frame)
-    plt.show(block=True) 
-    input("Press Enter to continue...")
-    
-    
-    # print('Pillow ANTES: ', bg.getpixel((100, 200)))
-    # np_bg = np.asarray(bg)
-    # print('Numpy: ', np_bg[200,100])
-    # bg = Image.fromarray(np_bg)
-    # print('Pillow DEPOIS: ', bg.getpixel((100, 200)))
-    # bg_pix = bg.load()
-    # print('Pillow INDEX: ', bg_pix[100, 200])
-    
-    
-    #site sobre como usar o paste do pillow
-    #https://note.nkmk.me/en/python-pillow-paste/
-   
-    return None
-
 
 
 
