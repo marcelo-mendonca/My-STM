@@ -188,19 +188,19 @@ def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects
         
         #pad with 100 pixels (50 by side)
         obj_rgb = img_pad(obj_rgb, 100)
-        obj_mask = img_pad(obj_mask, 100)        
- 
+        obj_mask = img_pad(obj_mask, 100)   
         
         global fg_rgb_transf
         global fg_mask_transf
         global fg_affine
         
         transf_obj_rgb = fg_rgb_transf(obj_rgb)
-        transf_obj_mask = fg_mask_transf(obj_mask)
-        
+        transf_obj_mask = fg_mask_transf(obj_mask)        
         
         obj_rgb_triplet = ChannelsLast()(transf_obj_rgb)
         obj_mask_triplet = ChannelsLast()(transf_obj_mask)[:,:,0]
+        
+        obj_rgb_triplet, obj_mask_triplet = random_flip(obj_rgb_triplet, obj_mask_triplet)
         
         N_frames[0], N_masks[0] = random_paste(N_frames[0], N_masks[0], obj_rgb_triplet, obj_mask_triplet*(k+1), 100)
         
@@ -210,6 +210,8 @@ def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects
             
             obj_rgb_triplet = ChannelsLast()(new_obj_rgb)
             obj_mask_triplet = ChannelsLast()(new_obj_mask).ceil()[:,:,0]
+            
+            obj_rgb_triplet, obj_mask_triplet = random_flip(obj_rgb_triplet, obj_mask_triplet)
             
             N_frames[t], N_masks[t] = random_paste(N_frames[t], N_masks[t], obj_rgb_triplet, obj_mask_triplet*(k+1), 100)
     
@@ -255,6 +257,18 @@ def random_paste(frame_canvas, mask_canvas, frame, mask, wpad, hpad=None):
     mask_canvas[wci:wcf, hci:hcf] = mask_canvas[wci:wcf, hci:hcf] + mask[wpi:wpf, hpi:hpf]    
     
     return frame_canvas, mask_canvas
+
+def random_flip(frame, mask, probh=20, probv=20):
+    
+    if random.randint(1,100) <= probv:        
+        frame = torch.flip(frame, [0])
+        mask = torch.flip(mask, [0])
+    
+    if random.randint(1,100) <= probh:        
+        frame = torch.flip(frame, [1])
+        mask = torch.flip(mask, [1])    
+    
+    return frame, mask
  
 
 def img_unpad(img, wpad, hpad=None):    
@@ -338,7 +352,6 @@ if __name__ == "__main__":
     
     
     print('inicio')
-    
     
     # for aa in range(5):
     #     _, w, h = next(bg_pool)
