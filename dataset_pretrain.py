@@ -45,20 +45,13 @@ class coco_background(data.Dataset):
         
         self.coco = COCO(self.annFile)
         self.img_ids = self.coco.getImgIds()
-        self.fixed_size = (384, 384)
-        
-        #img:  [{'license': 5, 'file_name': '000000010092.jpg', 'coco_url': 'http://images.cocodataset.org/val2017/000000010092.jpg', 
-        #'height': 426, 'width': 640, 'date_captured': '2013-11-21 00:20:22', 
-        #'flickr_url': 'http://farm9.staticflickr.com/8276/8710590452_08a7a8f59c_z.jpg', 'id': 10092}]        
+        self.fixed_size = (384, 384)   
         
     def __getitem__(self, idx):
         
         img_id = self.img_ids[idx]
         img_data = self.coco.loadImgs(img_id)
-        img_path = os.path.join(self.image_dir,img_data[0]['file_name'])
-        #img = Image.open(img_path).convert('RGB')        
-        #image = np.array(img)/255.
-        #image = np.array(img.resize(self.fixed_size, Image.ANTIALIAS))/255.        
+        img_path = os.path.join(self.image_dir,img_data[0]['file_name'])       
         w = img_data[0]['width']
         h = img_data[0]['height']       
         
@@ -77,12 +70,12 @@ print('-------------------------Completed!')
 bg_affine = RandomAffine(rotation_range=20, shear_range=10, zoom_range=(0.9, 1.1))
     
 bg_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), RangeNormalize(0, 1), 
-                     RandomBrightness(-0.2,0.2), bg_affine, RandomCrop(coco_bg.fixed_size), ChannelsLast()])
+                     RandomBrightness(-0.1,0.1), bg_affine, RandomCrop(coco_bg.fixed_size), ChannelsLast()])
 
 fg_affine = RandomAffine(rotation_range=90, shear_range=10, zoom_range=(0.5, 1.5))
 
 fg_rgb_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), 
-                     RangeNormalize(0, 1), RandomBrightness(-0.2,0.2)])
+                     RangeNormalize(0, 1), RandomBrightness(-0.1,0.1)])
 
 fg_mask_transf = Compose([ToTensor(), AddChannel(axis=0), TypeCast('float'), 
                           RangeNormalize(0, 1)])
@@ -105,6 +98,8 @@ class VOC_dataset(data.Dataset):
         self.mask_dir = os.path.join(voc_root, 'SegmentationObject')            
         splits_dir = os.path.join(voc_root, 'ImageSets/Segmentation')
         split_f = os.path.join(splits_dir, imset.rstrip('\n') + '.txt')
+        self.fixed_size = (384, 384)
+        self.k = 11
         
         with open(os.path.join(split_f), "r") as f:
             self.img_list = [x.strip() for x in f.readlines()]
@@ -120,15 +115,17 @@ class VOC_dataset(data.Dataset):
         mask = (mask != 255).astype(np.uint8) * mask
         num_objects = np.max(mask)
         
-        global coco_bg_cycle
-        bg_path, _, _ = next(coco_bg_cycle)
+                
+        N_frames, N_masks, num_objects = make_triplet(image, mask, num_objects, 
+                                                     triplet_size=self.fixed_size,
+                                                     k=self.k)
         
-        bg = Image.open(bg_path[0]).convert('RGB')
+        info = {}
+        info['name'] = self.img_list[idx]
+        info['num_frames'] = N_frames.shape[1]
+        info['size_480p'] = self.fixed_size
         
-        make_triplet2(image, mask, num_objects, np.array(bg))
-        
-        
-        return image, mask, num_objects, np.array(bg)
+        return N_frames, N_masks, num_objects, info
 
 
     def __len__(self):
@@ -138,30 +135,20 @@ class VOC_dataset(data.Dataset):
 
 ############################ AUX FUNCTIONS ################################
 
-def make_triplet2(fg_frame, fg_mask, num_objects, bg=None, triplet_size=(384,384)): 
+def make_triplet(fg_frame, fg_mask, num_objects, triplet_size=(384,384), k=11):      
     
-    bg_triplet = make_bg_triplet(bg, triplet_size)
+    bg_triplet = make_bg_triplet(triplet_size=triplet_size)
     
-    N_frames, N_masks, num_objects = make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet)
+    N_frames, N_masks, num_objects = make_fg_triplet(fg_frame, fg_mask, num_objects, 
+                                                     bg_triplet, triplet_size=triplet_size)    
     
-    ff = plt.figure()
-    ff.add_subplot(2,3,1)
-    plt.imshow(N_frames[0])
-    ff.add_subplot(2,3,2)
-    plt.imshow(N_frames[1])
-    ff.add_subplot(2,3,3)
-    plt.imshow(N_frames[2])
-    ff.add_subplot(2,3,4)
-    plt.imshow(N_masks[0])
-    ff.add_subplot(2,3,5)
-    plt.imshow(N_masks[1])
-    ff.add_subplot(2,3,6)
-    plt.imshow(N_masks[2])
-    plt.show(block=True) 
-    input("Press Enter to continue...")   
+    N_frames = N_frames.permute(3,0,1,2).float()
     
+    num_objects = torch.LongTensor([num_objects])
     
-    return        
+    N_masks = All_to_onehot(N_masks, k).float()  
+    
+    return N_frames, N_masks, num_objects
 
 def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects=3, triplet_size=(384,384)):  
     
@@ -180,11 +167,12 @@ def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects
 
         obj_rgb = obj_mask[:,:,None] * fg_frame
         
-        rmin, rmax, cmin, cmax = bbox2(obj_mask)
-        
-        obj_rgb = obj_rgb[rmin : rmax, cmin : cmax]
-        
-        obj_mask = obj_mask[rmin : rmax, cmin : cmax]
+        try:        
+            rmin, rmax, cmin, cmax = bbox2(obj_mask)        
+            obj_rgb = obj_rgb[rmin : rmax, cmin : cmax]        
+            obj_mask = obj_mask[rmin : rmax, cmin : cmax]
+        except:
+            pass
         
         #pad with 100 pixels (50 by side)
         obj_rgb = img_pad(obj_rgb, 100)
@@ -195,10 +183,10 @@ def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects
         global fg_affine
         
         transf_obj_rgb = fg_rgb_transf(obj_rgb)
-        transf_obj_mask = fg_mask_transf(obj_mask)        
+        transf_obj_mask = fg_mask_transf(obj_mask)
         
         obj_rgb_triplet = ChannelsLast()(transf_obj_rgb)
-        obj_mask_triplet = ChannelsLast()(transf_obj_mask)[:,:,0]
+        obj_mask_triplet = transf_obj_mask[0]
         
         obj_rgb_triplet, obj_mask_triplet = random_flip(obj_rgb_triplet, obj_mask_triplet)
         
@@ -209,7 +197,7 @@ def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects
             new_obj_rgb, new_obj_mask = fg_affine(transf_obj_rgb, transf_obj_mask)
             
             obj_rgb_triplet = ChannelsLast()(new_obj_rgb)
-            obj_mask_triplet = ChannelsLast()(new_obj_mask).ceil()[:,:,0]
+            obj_mask_triplet = new_obj_mask[0].ceil()
             
             obj_rgb_triplet, obj_mask_triplet = random_flip(obj_rgb_triplet, obj_mask_triplet)
             
@@ -299,11 +287,10 @@ def img_pad(img, wpad, hpad=None):
     return np.pad(img, pad_sizes, mode='constant')
     
 
-def resize_keeping_aspect_ratio(img, new_size=(384,384)):    
-    img_pil = Image.fromarray(img)
-    img_w, img_h = img.shape[0], img.shape[1]
-    (w,h) = new_size
-        
+def resize_to_minimum_size(img, min_size=(384,384)):        
+    img_w, img_h = img.size[0], img.size[1]
+    (w,h) = min_size
+
     if (img_w - w < 0) or (img_h - h < 0):   
         if img_w <= img_h:
             wsize = w
@@ -313,9 +300,9 @@ def resize_keeping_aspect_ratio(img, new_size=(384,384)):
             hsize = h
             wpercent = (hsize/float(img_h))
             wsize = int((float(img_w)*float(wpercent)))
-        img_pil = img_pil.resize((hsize,wsize), Image.ANTIALIAS)
+        img = img.resize((wsize,hsize), Image.ANTIALIAS)
     
-    return np.asarray(img_pil)
+    return np.asarray(img)
     
 
 def bbox2(img):
@@ -326,39 +313,47 @@ def bbox2(img):
 
     return rmin, rmax+1, cmin, cmax+1
 
-def make_bg_triplet(bg=None, triplet_size=(384,384)):
+def make_bg_triplet(bg_path=None, triplet_size=(384,384)):
     
     #get background image
-    if bg is None:
+    if bg_path is None:
         global coco_bg_cycle
-        bg, _, _ = next(coco_bg_cycle)
+        bg_path, _, _ = next(coco_bg_cycle)
+        bg_path = bg_path[0]    
+    bg_img = Image.open(bg_path).convert('RGB')
     
     #resize background sides to be at least the same size of canvas sides
-    bg = resize_keeping_aspect_ratio(bg, new_size=triplet_size)   
+    bg = resize_to_minimum_size(bg_img, min_size=triplet_size)   
         
-    bg_frames = torch.zeros(3, triplet_size[0], triplet_size[1], 3)
+    bg_triplet = torch.zeros(3, triplet_size[0], triplet_size[1], 3)
     
     global bg_transf
     
     for t in range(3):        
-        bg_frames[t] = bg_transf(bg.copy())   
+        bg_triplet[t] = bg_transf(bg.copy())    
     
-    
-    return bg_frames
+    return bg_triplet
 
+def To_onehot(mask, K):
+    M = torch.zeros(K, mask.shape[0], mask.shape[1]).int()
+    for k in range(K):
+        M[k] = (mask == k).int()
+    return M # M:  (11, 384, 384)
+
+def All_to_onehot(masks, K):
+    # k = 11
+    # masks:  (3, 384, 384) -> 3 máscaras do train_triplet
+    Ms = torch.zeros(K, masks.shape[0], masks.shape[1], masks.shape[2]).int()
+    for n in range(masks.shape[0]): #n -> 0, 1, 2
+        Ms[:,n] = To_onehot(masks[n], K)
+        
+    return Ms # Ms:  (11, 3, 384, 384)
 
 
 if __name__ == "__main__":
     
     
     print('inicio')
-    
-    # for aa in range(5):
-    #     _, w, h = next(bg_pool)
-    #     print('w: {}, h: {}'.format(w,h))
-    
-    # #get_background()
-    # input("Press Enter to continue...")
     
     trainset = VOC_dataset(data_root='../rvos-master/databases', year='2012', imset='train')
     print('trainset instanciado, lenght: ', len(trainset))
@@ -368,28 +363,43 @@ if __name__ == "__main__":
     print('trainloader instanciado, lenght: ', len(trainloader))
     
     dataiter = iter(trainloader)
-    print('dataiter instanciado')
     
-    for aa in range(5):
-        image, mask, num_objects, bg = dataiter.next()
-        print('num objects: ', num_objects[0])
+    for cc in range(5):
         
+        image, mask, n_obj, _ = dataiter.next()
         
+    
+        N_frames = image[0].permute(1, 2, 3, 0)
+        N_masks = mask[0].permute(1, 2, 3, 0)
+        num_objects = n_obj[0].item()
+            
+        print('N_frames: {}, {}'.format(N_frames.shape, N_frames.dtype))    
+        print('N_masks: {}, {}'.format(N_masks.shape, N_masks.dtype))    
+        print('num_objects: {}'.format(num_objects))
+        # N_frames: torch.Size([1, 3, 3, 384, 384]), torch.float32
+        # N_masks: torch.Size([1, 11, 3, 384, 384]), torch.int32
+        # num_objects: tensor([[1]]), torch.int64
         
-        #print('image: {}, label: {}, img_list: {}'.format(image,mask, img))        
-        
-        ff = plt.figure()
-        ff.add_subplot(1,3,1)
-        plt.imshow(image[0])
-        ff.add_subplot(1,3,2)
-        plt.imshow(mask[0])
-        ff.add_subplot(1,3,3)
-        plt.imshow(bg[0])
-        plt.show(block=True) 
-        input("Press Enter to continue...")
-
-
-
+       
+    
+        for hh in range(num_objects+1):
+            print('Mask CH: ', hh)
+            ff = plt.figure()
+            ff.add_subplot(2,3,1)
+            plt.imshow(N_frames[0])
+            ff.add_subplot(2,3,2)
+            plt.imshow(N_frames[1])
+            ff.add_subplot(2,3,3)
+            plt.imshow(N_frames[2])
+            ff.add_subplot(2,3,4)
+            plt.imshow(N_masks[0,:,:,hh])
+            ff.add_subplot(2,3,5)
+            plt.imshow(N_masks[1,:,:,hh])
+            ff.add_subplot(2,3,6)
+            plt.imshow(N_masks[2,:,:,hh])
+            plt.show(block=True) 
+            
+            input("Press Enter to continue...") 
 
 
 

@@ -65,8 +65,45 @@ def get_arguments():
     #return
     return parser.parse_args()
 
-def run_train():
+def get_dataloader(DATA_ROOT, YEAR, SET, batch_size, frame_skip, datasets=['youtube', 'davis'], phase='main_train'):
     
+    if phase == 'main_train':    
+        if 'davis' in datasets:   
+            # DAVIS trainset
+            davis_Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p',
+                                            imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16), frame_skip=frame_skip)
+            Trainset = davis_Trainset
+        if 'youtube' in datasets:
+            # Youtube trainset
+            youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p',
+                                                imset='train-train-meta.json', single_object=False, frame_skip=frame_skip)
+            Trainset = youtube_Trainset
+        if 'davis' in datasets and 'youtube' in datasets:
+            #concat DAVIS + Youtube
+            Trainset = data.ConcatDataset(5*[davis_Trainset]+[youtube_Trainset])    
+        #train data loader
+        return data.DataLoader(Trainset, batch_size=batch_size, shuffle=True, num_workers=1)
+        
+    elif phase == 'validation':
+        if 'davis' in datasets:        
+            davis_Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', 
+                                        imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+            Valset = davis_Valset
+        if 'youtube' in datasets:
+            youtube_Valset = Youtube_MO_Val(DATA_ROOT, resolution='480p', 
+                                            imset='train-val-meta.json', single_object=False)
+            Valset = youtube_Valset
+        if 'davis' in datasets and 'youtube' in datasets:        
+            Valset = data.ConcatDataset(5*[davis_Valset]+[youtube_Valset])
+        return data.DataLoader(Valset, batch_size=batch_size, shuffle=True, num_workers=1)
+    
+    elif phase == 'pre_train':
+        print('phase: pre_train')
+        return
+    #Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    #Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=1)
+
+def run_train():    
     # get arguments
     args = get_arguments()    
     GPU = args.g
@@ -74,10 +111,11 @@ def run_train():
     SET = args.s
     #VIZ = args.viz
     DATA_ROOT = args.D
+    datasets=['youtube', 'davis']
     
     # Model and version
     MODEL = 'STM'
-    print(MODEL, ': Using Dataset DAVIS', YEAR)    
+    print(MODEL, ': Using Dataset', datasets)    
     os.environ['CUDA_VISIBLE_DEVICES'] = GPU
     print('--- CUDA:')
     
@@ -94,30 +132,10 @@ def run_train():
         device = torch.device("cpu")
         num_devices = 1
     
-    # batch sizes
+    # dataloader parameters
     train_batch_size = num_devices
     val_batch_size = 12
-    
-    # DAVIS trainset
-    davis_Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    
-    # Youtube trainset
-    youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', imset='train-train-meta.json', single_object=False)
-    
-    #concat DAVIS + Youtube
-    Trainset = data.ConcatDataset(5*[davis_Trainset]+[youtube_Trainset])
-    
-    #train data loader
-    Trainloader = data.DataLoader(Trainset, batch_size=train_batch_size, shuffle=False, num_workers=1)
-    
-    #validation dataset and loader
-    davis_Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    youtube_Valset = Youtube_MO_Val(DATA_ROOT, resolution='480p', imset='train-val-meta.json', single_object=False)
-    Valset = data.ConcatDataset(5*[davis_Valset]+[youtube_Valset])
-    Valloader = data.DataLoader(Valset, batch_size=val_batch_size, shuffle=False, num_workers=1)
-    
-    #Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    #Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=1)
+    frame_skip = 5
     
     # Isntantiate the model
     model = STM()
@@ -141,7 +159,6 @@ def run_train():
     
     writer = SummaryWriter()
     start_epoch = 0
-    iters_per_epoch = len(Trainloader)
     
     # load saved model if specified
     if args.loadepoch >= 0:
@@ -153,7 +170,9 @@ def run_train():
         # load entire saved model from checkpoint
         checkpoint = torch.load(load_name) # dict_keys(['epoch', 'model', 'optimizer'])
         # set next epoch to resume the training
-        start_epoch = checkpoint['epoch'] + 1        
+        start_epoch = checkpoint['epoch'] + 1  
+        # set frame_skip
+        frame_skip = checkpoint['frame_skip']
         # filter out unnecessary keys from checkpoint
         checkpoint['model'] = {k:v for k,v in checkpoint['model'].items() if k in state}
         # overwrite entries in the existing state dict
@@ -167,24 +186,35 @@ def run_train():
         torch.cuda.empty_cache()
         print('  - complete!')       
     
+    # instantiate dataloaders
+    Trainloader = get_dataloader(DATA_ROOT, YEAR, SET, train_batch_size, 
+                                 frame_skip, datasets=datasets, phase='main_train')
+    Valloader = get_dataloader(DATA_ROOT, YEAR, SET, val_batch_size, 
+                               frame_skip, datasets=datasets, phase='validation')
+    iters_per_epoch = len(Trainloader)
+    
     # loop for training and validation
     for epoch in range(start_epoch, args.num_epochs):                
         
         # training
-        model.eval() #set eval mode to disable batchnorm and dropout
         print('[Train] Epoch {}{}{}'.format(font.BOLD, epoch+1, font.END))
          
-        # increases maximum frame skip by 5 (range 5->25) after 20 epochs 
-        davis_Trainset.Set_frame_skip(epoch)
-        youtube_Trainset.Set_frame_skip(epoch)
+        # increases maximum frame skip by 5 (range 5->25) after 20 epochs
+        if (epoch > 0) and (epoch % 20 == 0):
+            frame_skip = min([frame_skip+5, 25])
+            
+            #instantiate datasets and dataloader again with updated frame skip
+            Trainloader = get_dataloader(DATA_ROOT, YEAR, SET, train_batch_size, 
+                                         frame_skip, datasets=datasets, phase='main_train')
         
+        model.eval() #set eval mode to disable batchnorm and dropout
         running_loss = 0.0
         mean_iou = 0.0
           
         for seq, V in enumerate(Trainloader):
             
             ############# interrupção só para testar
-            if seq > 99:
+            if seq > 0:
                 break
             
             Fs, Ms, num_objects, info = V
@@ -261,7 +291,7 @@ def run_train():
         # saving checkpoint    
         if epoch % 10 == 0 and epoch > 0:
             save_name = '{}/{}.pth'.format(MODEL_DIR, epoch)
-            torch.save({'epoch': epoch,'model': model.state_dict(),
+            torch.save({'epoch': epoch, 'frame_skip': frame_skip,'model': model.state_dict(),
                         'optimizer': optimizer.state_dict(),}, save_name)
             print('Model saved in: {}'.format(save_name))
             
@@ -276,15 +306,14 @@ def run_train():
         print("The End")    
 
 def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number=None):
-    #model = STM()
-    
+        
     idx = 0
     next_change = 0
     
     for seq, V in enumerate(Valloader):
                     
         ############# interrupção só para testar
-        if seq > 20:
+        if seq > 0:
             break
         
         Fss, Mss, nums_objects, infos = V
@@ -369,9 +398,9 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
             if idx == next_change - 1: #last frame of the sequence
                 print("[VAL] idx: %d, loss: %.3f, iou: %.3f" % (idx+1, loss/(num_frames-1), mean_iou/(num_frames-1)))  
                 
-            idx += 1       
-            
-    
+            idx += 1              
+
+
         
 if __name__ == "__main__":
     
