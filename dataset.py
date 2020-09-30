@@ -14,7 +14,7 @@ from torchsample.transforms import ChannelsLast, Compose, RandomBrightness, Rang
 import matplotlib.pyplot as plt
 from skimage.morphology import disk
 from skimage.filters.rank import modal
-from dataset_pretrain import All_to_onehot
+from dataset_pretrain import All_to_onehot, bbox2
 
 
 ############################ YOUTUBE TRAIN ################################
@@ -78,15 +78,15 @@ class Youtube_MO_Train(data.Dataset):
         valid_samples = [False, False, False]
         
         for idx, f in enumerate(train_triplet):
+            
             frame_path = self.frame_paths[video][f]
-            frame, coord = resize_keeping_aspect_ratio(Image.open(frame_path).convert('RGB'), self.fixed_size)
-            #frame:  numpy (w>=fixed_size[0], h>=fixed_size[1], c)
+            frame, new_size = random_resize(Image.open(frame_path).convert('RGB'), self.fixed_size)
             
             try:
                 mask_path = self.mask_paths[video][f]
-                mask, _ = resize_keeping_aspect_ratio(Image.open(mask_path).convert('P'), self.fixed_size, coord)
+                mask, _ = random_resize(Image.open(mask_path).convert('P'), self.fixed_size, new_size)
             except:
-                mask = np.zeros(self.fixed_size, dtype=np.uint8)
+                mask = np.zeros(new_size, dtype=np.uint8)
             #masks:  numpy (w>=fixed_size, h>=fixed_size)
             
             frame_transf, mask_transf = self.affine_transf(self.frame_transf(frame.copy()), self.mask_transf(mask.copy()))
@@ -94,17 +94,23 @@ class Youtube_MO_Train(data.Dataset):
             #mask_transf:  torch (c, w, h) -> c=1
             
             new_frame = ChannelsLast()(frame_transf)
-            new_mask = torch.from_numpy(modal(np.array(mask_transf[0]).astype(np.uint8), disk(5))) # modal function clean up some noise caused by affine_transf
+            np_mask = modal(np.array(mask_transf[0]).astype(np.uint8), disk(5)) # modal function clean up some noise caused by affine_transf
+            new_mask = torch.from_numpy(np_mask) 
             #new_frame:  torch (w, h, c)
             #new_mask:  torch (w, h)
             
-            N_frames[idx], N_masks[idx] = random_crop(N_frames[idx], N_masks[idx], new_frame, new_mask, 0)
+            try:
+                bbox = bbox2(np_mask)
+            except:
+                bbox = None
+            N_frames[idx], coord = random_crop(new_frame, self.fixed_size, bbox)            
+            N_masks[idx], _ = random_crop(new_mask, self.fixed_size, bbox, coord)            
             #N_frames: torch (n, w=fixed_size[0], h=fixed_size[1], c) -> torch.float32
             #N_masks: torch (n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
             
             valid_samples[idx] = (torch.max(N_masks[idx]) > 0).item()
         
-        info['valid_samples'] = valid_samples            
+        info['valid_samples'] = valid_samples      
         N_frames = N_frames.permute(3, 0, 1, 2)
         if self.single_object:
             N_masks = (N_masks > 0.5).int() * (N_masks < 255).int()
@@ -135,7 +141,7 @@ class DAVIS_MO_Train(data.Dataset):
             raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
         
         self.mask_dir = os.path.join(root, 'Annotations', resolution)
-        self.mask480_dir = os.path.join(root, 'Annotations', '480p')
+        #self.mask480_dir = os.path.join(root, 'Annotations', '480p')
         self.image_dir = os.path.join(root, 'JPEGImages', resolution)
         _imset_dir = os.path.join(root, 'ImageSets')
         _imset_f = os.path.join(_imset_dir, imset)
@@ -158,6 +164,7 @@ class DAVIS_MO_Train(data.Dataset):
                 _video = line.rstrip('\n')
                 self.videos.append(_video)
                 self.num_frames[_video] = len(glob.glob(os.path.join(self.image_dir, _video, '*.jpg')))
+                self.num_objects[_video] = np.max(np.array(Image.open(os.path.join(self.mask_dir, _video, '00000.png')).convert("P")))
                 
                 #starts from 2 so that there are at least 2 frames before
                 for f in range(2, self.num_frames[_video]):
@@ -171,8 +178,6 @@ class DAVIS_MO_Train(data.Dataset):
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
-        first_mask = np.array(Image.open(os.path.join(self.mask_dir, video, '00000.png')).convert("P"))
-        self.num_objects[video] = np.max(first_mask)
         
         N_frames = torch.zeros(3, self.fixed_size[0], self.fixed_size[1], 3)
         N_masks = torch.zeros(3, self.fixed_size[0], self.fixed_size[1]) 
@@ -185,15 +190,15 @@ class DAVIS_MO_Train(data.Dataset):
         valid_samples = [False, False, False]
         
         for idx, f in enumerate(train_triplet):
+            
             frame_path = os.path.join(self.image_dir, video, '{:05d}.jpg'.format(f))
-            frame, coord = resize_keeping_aspect_ratio(Image.open(frame_path).convert('RGB'), self.fixed_size)
-            #frame:  numpy (w>=fixed_size[0], h>=fixed_size[1], c)
+            frame, new_size = random_resize(Image.open(frame_path).convert('RGB'), self.fixed_size)
             
             try:
-                mask_path = os.path.join(self.mask_dir, video, '{:05d}.png'.format(f))
-                mask, _ = resize_keeping_aspect_ratio(Image.open(mask_path).convert('P'), self.fixed_size, coord)
+                mask_path = os.path.join(self.mask_dir, video, '{:05d}.png'.format(f)) 
+                mask, _ = random_resize(Image.open(mask_path).convert('P'), self.fixed_size, new_size)
             except:
-                mask = np.zeros(self.fixed_size, dtype=np.uint8)
+                mask = np.zeros(new_size, dtype=np.uint8)
             #masks:  numpy (w>=fixed_size, h>=fixed_size)
                 
             frame_transf, mask_transf = self.affine_transf(self.frame_transf(frame.copy()), self.mask_transf(mask.copy()))
@@ -201,11 +206,17 @@ class DAVIS_MO_Train(data.Dataset):
             #mask_transf:  torch (c, w, h) -> c=1
             
             new_frame = ChannelsLast()(frame_transf)
-            new_mask = torch.from_numpy(modal(np.array(mask_transf[0]).astype(np.uint8), disk(5))) # modal function clean up some noise caused by affine_transf
+            np_mask = modal(np.array(mask_transf[0]).astype(np.uint8), disk(5)) # modal function clean up some noise caused by affine_transf
+            new_mask = torch.from_numpy(np_mask) 
             #new_frame:  torch (w, h, c)
             #new_mask:  torch (w, h)
             
-            N_frames[idx], N_masks[idx] = random_crop(N_frames[idx], N_masks[idx], new_frame, new_mask, 0)
+            try:
+                bbox = bbox2(np_mask)
+            except:
+                bbox = None
+            N_frames[idx], coord = random_crop(new_frame, self.fixed_size, bbox)            
+            N_masks[idx], _ = random_crop(new_mask, self.fixed_size, bbox, coord)
             #N_frames: torch (n, w=fixed_size[0], h=fixed_size[1], c) -> torch.float32
             #N_masks: torch (n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
             
@@ -240,10 +251,8 @@ class Youtube_MO_Val(data.Dataset):
         if not os.path.isdir(root):
             raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
         
-        self.root = root
-        self.mask_dir = os.path.join(root, 'Annotations')
-        self.mask480_dir = os.path.join(root, 'Annotations')
-        self.image_dir = os.path.join(root, 'JPEGImages')
+        mask_dir = os.path.join(root, 'Annotations')
+        image_dir = os.path.join(root, 'JPEGImages')
         _imset_dir = os.path.join(root)
         _imset_f = os.path.join(_imset_dir, imset)
         
@@ -252,28 +261,25 @@ class Youtube_MO_Val(data.Dataset):
         self.frame_paths = {}
         self.mask_paths = {}
         self.num_objects = {}
-        self.shape = {}
-        self.size_480p = {}
         self.batch_frames = {}
-        self.fixed_size = (100, 100) #(384,384)
+        self.fixed_size = (384,384)
+        self.frame_transf = Compose([ToTensor(), TypeCast('float'), RangeNormalize(0, 1)])
+        self.mask_transf = Compose([ToTensor(), TypeCast('float')])
         idx = 0 
         
         with open(_imset_f) as json_file:
             json_data = edict(json.load(json_file))
             for _video in json_data.videos.keys():
                 self.videos.append(_video)
-                self.frame_paths[_video] = glob.glob(os.path.join(self.image_dir, _video, '*.jpg'))
+                self.frame_paths[_video] = glob.glob(os.path.join(image_dir, _video, '*.jpg'))
                 self.num_frames[_video] = len(self.frame_paths[_video])
-                self.mask_paths[_video] = glob.glob(os.path.join(self.mask_dir, _video, '*.png'))
+                self.mask_paths[_video] = glob.glob(os.path.join(mask_dir, _video, '*.png'))
                 self.num_objects[_video] = len(json_data.videos[_video].objects)
-                self.shape[_video] = self.fixed_size
-                self.size_480p[_video] = self.fixed_size
                 
                 #starts from 0 to get all frames in sequence
                 for f in range(self.num_frames[_video]):
                     self.batch_frames[idx] = (_video, f)
-                    idx += 1
-        
+                    idx += 1        
         self.K = 11
         self.single_object = single_object
 
@@ -282,41 +288,51 @@ class Youtube_MO_Val(data.Dataset):
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
-        info['size_480p'] = self.size_480p[video]
-
-        N_frames = np.empty((1,)+self.shape[video]+(3,), dtype=np.float32)
-        N_masks = np.empty((1,)+self.shape[video], dtype=np.uint8)
-        #N_frames:  (1, 384, 384, 3) -> frames, w, h, ch
-        #N_masks:  (1, 384, 384) -> frames, w, h
+        
+        N_frames = torch.zeros(1, self.fixed_size[0], self.fixed_size[1], 3)
+        N_masks = torch.zeros(1, self.fixed_size[0], self.fixed_size[1]) 
+        #N_frames:  (n, w, h, c) -> num frames, widith, height, channel
+        #N_masks:  (n, w, h)       
         
         frame_idx = self.batch_frames[index][1]
-        img_file = self.frame_paths[video][frame_idx]
-        N_frames[0], coord = Crop_frames(Image.open(img_file).convert('RGB'), self.fixed_size)
+        frame_path = self.frame_paths[video][frame_idx]
+        frame, new_size = random_resize(Image.open(frame_path).convert('RGB'), self.fixed_size)
+        #frame:  numpy (w>=fixed_size[0], h>=fixed_size[1], c)
         
         try:
-            mask_file = self.mask_paths[video][frame_idx]
-            N_masks[0], coord = Crop_frames(Image.open(mask_file).convert('P'), self.fixed_size, coord)
+            mask_path = self.mask_paths[video][frame_idx]
+            mask, _ = random_resize(Image.open(mask_path).convert('P'), self.fixed_size, new_size)
         except:
-            N_masks[0] = 255
+            mask = np.zeros(new_size, dtype=np.uint8)
+        #masks:  numpy (w>=fixed_size, h>=fixed_size)
+            
+        new_frame = self.frame_transf(frame.copy())
+        new_mask = self.mask_transf(mask.copy())
         
-        Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
-        #Fs:  torch.Size([3, 3, 480, 854]) -> canais, frames, linhas, colunas
+        try:
+            bbox = bbox2(mask)
+        except:
+            bbox = None
+        N_frames[0], coord = random_crop(new_frame, self.fixed_size, bbox)            
+        N_masks[0], _ = random_crop(new_mask, self.fixed_size, bbox, coord)            
+        #N_frames: torch (n, w=fixed_size[0], h=fixed_size[1], c) -> torch.float32
+        #N_masks: torch (n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
+        
+        N_frames = N_frames.permute(3, 0, 1, 2)
         if self.single_object:
-            N_masks = (N_masks > 0.5).astype(np.uint8) * (N_masks < 255).astype(np.uint8)
-            Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
+            N_masks = (N_masks > 0.5).int() * (N_masks < 255).int()
+            N_masks = All_to_onehot(N_masks, self.K).float()
             num_objects = torch.LongTensor([int(1)])
-            return Fs, Ms, num_objects, info
+            return N_frames, N_masks, num_objects, info
         else:
-            Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
-            #Ms:  torch.Size([11, 3, 480, 854]) -> canais, frames, linhas, colunas
+            N_masks = All_to_onehot(N_masks, self.K).float()
             num_objects = torch.LongTensor([int(self.num_objects[video])])
-            return Fs, Ms, num_objects, info            
-            #Chega pelo dataloader lá na chamada com uma dimensao extra:
-            #Fs:  torch.Size([1, 3, 3, 480, 854])
-            #Ms:  torch.Size([1, 11, 3, 480, 854])
-            #num_objects:  tensor([[2]])
-            #info:  {'name': ['bike-packing'], 'num_frames': tensor([69]), 
-            #   'size_480p': [tensor([480]), tensor([854])]}
+            return N_frames, N_masks, num_objects, info
+            #N_frames: torch (c, n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
+            #N_masks: torch (k, n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
+            #num_objects:  tensor([[num_objects]]) -> torch.int
+            #info:  {'name', 'num_frames', 'valid_samples'}
+            #Obs. dataloader adds batch dimension in position 0 for each returned tensor
     
     def __len__(self):
         return len(self.batch_frames)
@@ -330,9 +346,7 @@ class DAVIS_MO_Val(data.Dataset):
         if not os.path.isdir(root):
             raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
         
-        self.root = root
         self.mask_dir = os.path.join(root, 'Annotations', resolution)
-        self.mask480_dir = os.path.join(root, 'Annotations', '480p')
         self.image_dir = os.path.join(root, 'JPEGImages', resolution)
         _imset_dir = os.path.join(root, 'ImageSets')
         _imset_f = os.path.join(_imset_dir, imset)
@@ -340,10 +354,10 @@ class DAVIS_MO_Val(data.Dataset):
         self.videos = []
         self.num_frames = {}
         self.num_objects = {}
-        self.shape = {}
-        self.size_480p = {}
         self.batch_frames = {}
-        self.fixed_size = (100, 100) #(384,384)
+        self.fixed_size = (384,384)
+        self.frame_transf = Compose([ToTensor(), TypeCast('float'), RangeNormalize(0, 1)])
+        self.mask_transf = Compose([ToTensor(), TypeCast('float')])
         idx = 0
         
         with open(os.path.join(_imset_f), "r") as lines:
@@ -352,14 +366,7 @@ class DAVIS_MO_Val(data.Dataset):
                 self.videos.append(_video)
                 self.num_frames[_video] = len(glob.glob(os.path.join(self.image_dir, _video, '*.jpg')))
                 _mask = np.array(Image.open(os.path.join(self.mask_dir, _video, '00000.png')).convert("P"))
-                #_mask:  (480, 854)
                 self.num_objects[_video] = np.max(_mask)
-                #self.shape[_video] = np.shape(_mask)
-                self.shape[_video] = self.fixed_size
-                _mask480 = np.array(Image.open(os.path.join(self.mask480_dir, _video, '00000.png')).convert("P"))
-                #_mask480:  (480, 854)
-                #self.size_480p[_video] = np.shape(_mask480)
-                self.size_480p[_video] = self.fixed_size
                 
                 #starts from 0 to get all frames in sequence
                 for f in range(self.num_frames[_video]):
@@ -373,41 +380,51 @@ class DAVIS_MO_Val(data.Dataset):
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
-        info['size_480p'] = self.size_480p[video]
-
-        N_frames = np.empty((1,)+self.shape[video]+(3,), dtype=np.float32)
-        N_masks = np.empty((1,)+self.shape[video], dtype=np.uint8)
-        #N_frames:  (1, 100, 100, 3) -> frames, w, h, ch
-        #N_masks:  (1, 100, 100) -> frames, w, h
+        
+        N_frames = torch.zeros(1, self.fixed_size[0], self.fixed_size[1], 3)
+        N_masks = torch.zeros(1, self.fixed_size[0], self.fixed_size[1]) 
+        #N_frames:  (n, w, h, c) -> num frames, widith, height, channel
+        #N_masks:  (n, w, h)       
         
         frame_idx = self.batch_frames[index][1]
-        img_file = os.path.join(self.image_dir, video, '{:05d}.jpg'.format(frame_idx))
-        N_frames[0], coord = Crop_frames(Image.open(img_file).convert('RGB'), self.fixed_size)
+        frame_path = os.path.join(self.image_dir, video, '{:05d}.jpg'.format(frame_idx))
+        frame, new_size = random_resize(Image.open(frame_path).convert('RGB'), self.fixed_size)
+        #frame:  numpy (w>=fixed_size[0], h>=fixed_size[1], c)
         
         try:
-            mask_file = os.path.join(self.mask_dir, video, '{:05d}.png'.format(frame_idx))  
-            N_masks[0], coord = Crop_frames(Image.open(mask_file).convert('P'), self.fixed_size, coord)
+            mask_path = os.path.join(self.mask_dir, video, '{:05d}.png'.format(frame_idx))
+            mask, _ = random_resize(Image.open(mask_path).convert('P'), self.fixed_size, new_size)
         except:
-            N_masks[0] = 255
+            mask = np.zeros(new_size, dtype=np.uint8)
+        #masks:  numpy (w>=fixed_size, h>=fixed_size)
+            
+        new_frame = self.frame_transf(frame.copy())
+        new_mask = self.mask_transf(mask.copy())
         
-        Fs = torch.from_numpy(np.transpose(N_frames.copy(), (3, 0, 1, 2)).copy()).float()
-        #Fs:  torch.Size([3, 3, 480, 854]) -> canais, frames, linhas, colunas
+        try:
+            bbox = bbox2(mask)
+        except:
+            bbox = None
+        N_frames[0], coord = random_crop(new_frame, self.fixed_size, bbox)            
+        N_masks[0], _ = random_crop(new_mask, self.fixed_size, bbox, coord)            
+        #N_frames: torch (n, w=fixed_size[0], h=fixed_size[1], c) -> torch.float32
+        #N_masks: torch (n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
+        
+        N_frames = N_frames.permute(3, 0, 1, 2)
         if self.single_object:
-            N_masks = (N_masks > 0.5).astype(np.uint8) * (N_masks < 255).astype(np.uint8)
-            Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
+            N_masks = (N_masks > 0.5).int() * (N_masks < 255).int()
+            N_masks = All_to_onehot(N_masks, self.K).float()
             num_objects = torch.LongTensor([int(1)])
-            return Fs, Ms, num_objects, info
+            return N_frames, N_masks, num_objects, info
         else:
-            Ms = torch.from_numpy(All_to_onehot(N_masks, self.K).copy()).float()
-            #Ms:  torch.Size([11, 3, 480, 854]) -> canais, frames, linhas, colunas
+            N_masks = All_to_onehot(N_masks, self.K).float()
             num_objects = torch.LongTensor([int(self.num_objects[video])])
-            return Fs, Ms, num_objects, info            
-            #Chega pelo dataloader lá na chamada com uma dimensao extra:
-            #Fs:  torch.Size([1, 3, 3, 480, 854])
-            #Ms:  torch.Size([1, 11, 3, 480, 854])
-            #num_objects:  tensor([[2]])
-            #info:  {'name': ['bike-packing'], 'num_frames': tensor([69]), 
-            #   'size_480p': [tensor([480]), tensor([854])]}
+            return N_frames, N_masks, num_objects, info
+            #N_frames: torch (c, n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
+            #N_masks: torch (k, n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
+            #num_objects:  tensor([[num_objects]]) -> torch.int
+            #info:  {'name', 'num_frames', 'valid_samples'}
+            #Obs. dataloader adds batch dimension in position 0 for each returned tensor
     
     def __len__(self):
         return len(self.batch_frames)
@@ -490,103 +507,65 @@ class DAVIS_MO_Test(data.Dataset):
         
 
 ############################ AUX FUNCTIONS ################################
-
-
-def Crop_frames(img, fixed_size, coord=None):
-        
-        fix_w, fix_h = fixed_size
-        w, h = img.size[0], img.size[1]
-        
-        if coord is None:
-            # resize
-            if w <= h:
-                #wsize = random.randrange(fix_w, max(fix_w+1,w))
-                wsize = fix_w
-                wpercent = (wsize/float(w))
-                hsize = int((float(h)*float(wpercent)))                
-            else:
-                #hsize = random.randrange(fix_h, max(fix_h+1,h))
-                hsize = fix_h
-                wpercent = (hsize/float(h))
-                wsize = int((float(w)*float(wpercent)))
-            img = np.array(img.resize((hsize,wsize), Image.ANTIALIAS))/255.
-                       
-            # crop
-            w, h = img.shape[0], img.shape[1]
-            new_w = (random.randrange(0, w - fix_w) if w > fix_w else 0)
-            new_h = (random.randrange(0, h - fix_h) if h > fix_h else 0)
-            new_img = img[new_w:new_w+fix_w, new_h:new_h+fix_h]
-             
-        else:
-            # resize
-            wsize, hsize, new_w, new_h = coord
-            img = np.array(img.resize((hsize,wsize), Image.ANTIALIAS), dtype=np.uint8)
             
-            # crop
-            w, h = img.shape[0], img.shape[1]
-            new_img = img[new_w:new_w+fix_w, new_h:new_h+fix_h]
-                   
-        return new_img, (wsize, hsize, new_w, new_h)
+def random_resize(img, min_size, new_size=None):    
+    min_w, min_h = min_size
+    w, h = img.size[0], img.size[1]
+    
+    if new_size is None:
+        if w <= h:
+            wsize = random.randrange(min_w, max(min_w+1,w))
+            wpercent = (wsize/float(w))
+            hsize = int((float(h)*float(wpercent)))                
+        else:
+            hsize = random.randrange(min_h, max(min_h+1,h))
+            wpercent = (hsize/float(h))
+            wsize = int((float(w)*float(wpercent)))
+        new_img = np.array(img.resize((wsize,hsize), Image.ANTIALIAS))/255.         
+    else:
+        wsize, hsize = new_size
+        new_img = np.array(img.resize((wsize,hsize), Image.ANTIALIAS), dtype=np.uint8)
+               
+    return new_img, (wsize, hsize)
 
-def random_crop(frame_canvas, mask_canvas, frame, mask, wpad, hpad=None):
-    
-    if hpad is None:
-        hpad = wpad
-        
-    w_paste, h_paste = frame.shape[0], frame.shape[1]
-    w_canvas, h_canvas = frame_canvas.shape[0], frame_canvas.shape[1]
-    
-    w_paste_pos = random.randint(0, max(0, w_paste - w_canvas + wpad))
-    h_paste_pos = random.randint(0, max(0, h_paste - h_canvas + hpad))
-    
-    w_paste_ini = max(0, w_paste_pos - wpad//2)
-    h_paste_ini = max(0, h_paste_pos - hpad//2)
-    
-    w_paste_fin = min(w_paste, w_paste_pos + w_canvas - wpad//2)
-    h_paste_fin = min(h_paste, h_paste_pos + h_canvas - hpad//2)
-    
-    w_canvas_pos_R = w_paste_fin - w_paste_pos
-    h_canvas_pos_R = h_paste_fin - h_paste_pos
-    
-    w_canvas_pos_L = w_paste_pos - w_paste_ini
-    h_canvas_pos_L = h_paste_pos - h_paste_ini
-    
-    w_canvas_ini = wpad//2 - w_canvas_pos_L
-    h_canvas_ini = hpad//2 - h_canvas_pos_L
-    
-    w_canvas_fin = wpad//2 + w_canvas_pos_R
-    h_canvas_fin = hpad//2 + h_canvas_pos_R
-    
-    wpi, wpf, hpi, hpf = w_paste_ini, w_paste_fin, h_paste_ini, h_paste_fin
-    wci, wcf, hci, hcf = w_canvas_ini, w_canvas_fin, h_canvas_ini, h_canvas_fin
-    
-    frame_canvas[wci:wcf, hci:hcf] = frame[wpi:wpf, hpi:hpf]
-    mask_canvas[wci:wcf, hci:hcf] = mask[wpi:wpf, hpi:hpf]
-    
-    return frame_canvas, mask_canvas
-
-def resize_keeping_aspect_ratio(img, min_size=(384,384), coord=None):        
-    img_w, img_h = img.size[0], img.size[1]
-    (w_min,h_min) = min_size        
+def random_crop(img, fixed_size, bbox=None, coord=None):    
+    fix_w, fix_h = fixed_size
+    w, h = img.shape[0], img.shape[1]
     
     if coord is None:
-        if img_w <= img_h:
-            wsize = random.randint(w_min, max(w_min, img_w))
-            wpercent = (wsize/float(img_w))
-            hsize = int((float(img_h)*float(wpercent)))                
+        if bbox is not None:
+            rmin, rmax, cmin, cmax = bbox
         else:
-            hsize = random.randint(h_min, max(h_min, img_h))
-            wpercent = (hsize/float(img_h))
-            wsize = int((float(img_w)*float(wpercent)))
-        img = img.resize((wsize,hsize), Image.ANTIALIAS)
+            rmin, rmax, cmin, cmax = 0, w, 0, h
+            
+        pad_w = np.floor((rmax-rmin)/10)
+        pad_h = np.floor((cmax-cmin)/10)
+        
+        w_L = min(rmin, rmax - pad_w - fix_w)
+        w_R = max(rmin + pad_w, rmax - fix_w)
+        
+        h_U = min(cmin, cmax - pad_h - fix_h)
+        h_D = max(cmin + pad_h, cmax - fix_h)
+        
+        try:
+            pos_w = random.randrange(max(0, w_L), min(w_R, w - fix_w))
+        except:
+            pos_w = 0
+        try:
+            pos_h = random.randrange(max(0, h_U), min(h_D, h - fix_h))
+        except:
+            pos_h = 0
+        
+        new_img = img[pos_w:pos_w+fix_w, pos_h:pos_h+fix_h]    
+    
     else:
-        wsize, hsize = coord
-        img = img.resize((wsize,hsize), Image.ANTIALIAS)
+        pos_w, pos_h = coord
+        new_img = img[pos_w:pos_w+fix_w, pos_h:pos_h+fix_h]
     
-    return np.asarray(img), (wsize, hsize)
+    return new_img, (pos_w, pos_h)
 
-def Skip_frames(frame, frame_skip, num_frames):
-    
+
+def Skip_frames(frame, frame_skip, num_frames):    
     if frame <= frame_skip:
         start_skip = 0
     else:
@@ -595,8 +574,8 @@ def Skip_frames(frame, frame_skip, num_frames):
     f1, f2 = sorted(random.sample(range(start_skip, frame), 2))
     
     return (f1, f2, frame)
-        
 
+############################ MAIN ################################
 if __name__ == '__main__':
     
     print('inicio')
@@ -604,31 +583,44 @@ if __name__ == '__main__':
     
     frame_skip = 5
     ##########
-    # DAVIS trainset
+    
     DATA_ROOT = '../rvos-master/databases'
     YEAR = 17
     SET = 'train'
+    
+    # Davis trainset
     davis_Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p',
                                     imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16), frame_skip=frame_skip)
     
     # Youtube trainset
     youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', 
                                         imset='train-train-meta.json', single_object=False, frame_skip=frame_skip)
+    # Youtube valset
+    youtube_Valset = Youtube_MO_Val(DATA_ROOT, resolution='480p', 
+                                            imset='train-val-meta.json', single_object=False)
+    # Davis valset
+    davis_Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', 
+                                        imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
     
     #concat DAVIS + Youtube
     trainset = data.ConcatDataset([davis_Trainset]+[youtube_Trainset])
-    print('trainset instanciado, lenght: ', len(trainset))
+    #print('trainset instanciado, lenght: ', len(trainset))
     
     #train data loader
-    trainloader = data.DataLoader(trainset, batch_size=1, shuffle=True, num_workers=0)
-    print('trainloader instanciado, lenght: ', len(trainloader))
+    trainloader = data.DataLoader(davis_Valset, batch_size=1, shuffle=True, num_workers=2)
+    #print('trainloader instanciado, lenght: ', len(trainloader))
     ##########
     
     dataiter = iter(trainloader)
     
-    for cc in range(5):
+    validos = 0
+    invalidos = 0
+    for cc in range(10):
+        
+        #print('Sample: {}/100'.format(cc))
         
         image, mask, n_obj, info = dataiter.next()
+        #_,_,_, info = dataiter.next()
         
     
         N_frames = image[0].permute(1, 2, 3, 0)
@@ -642,23 +634,64 @@ if __name__ == '__main__':
         # N_masks: torch.Size([1, 11, 3, 384, 384]), torch.int32
         # num_objects: tensor([[1]]), torch.int64
         
-        print('info valid samples', info['valid_samples'])
+        
+        
+        # if info['valid_samples'][0] and (info['valid_samples'][1] or info['valid_samples'][2]):
+        #     validos += 1
+        #     resu = 'valido'
+        # else:
+        #     invalidos += 1
+        #     resu = 'invalido'
+        
+        # print('sample ({}/10) {} = {}'.format(cc, info['valid_samples'], resu))
     
-        for hh in range(num_objects+1):
+    # print('\n\n')
+    # print('validos: {}/1000'.format(validos))
+    # print('invalidos: {}/1000'.format(invalidos))
+    
+    #1) validos: 737/1000
+    #1) invalidos: 263/1000
+    
+    #2) validos: 865/1000
+    #2) invalidos: 135/1000
+    
+    #3) validos: 984/1000
+    #3) invalidos: 16/1000
+    
+    #4) validos: 982/1000
+    #4) invalidos: 18/1000
+    
+    #5) validos: 982/1000
+    #5) invalidos: 18/1000
+    
+        # TRAIN
+        # for hh in range(1):
+        #     print('Mask CH: ', hh)
+        #     ff = plt.figure()
+        #     ff.add_subplot(2,3,1)
+        #     plt.imshow(N_frames[0])
+        #     ff.add_subplot(2,3,2)
+        #     plt.imshow(N_frames[1])
+        #     ff.add_subplot(2,3,3)
+        #     plt.imshow(N_frames[2])
+        #     ff.add_subplot(2,3,4)
+        #     plt.imshow(N_masks[0,:,:,hh])
+        #     ff.add_subplot(2,3,5)
+        #     plt.imshow(N_masks[1,:,:,hh])
+        #     ff.add_subplot(2,3,6)
+        #     plt.imshow(N_masks[2,:,:,hh])
+        #     plt.show(block=True) 
+            
+        #     input("Press Enter to continue...") 
+        
+        # VALIDATION
+        for hh in range(1):
             print('Mask CH: ', hh)
             ff = plt.figure()
-            ff.add_subplot(2,3,1)
+            ff.add_subplot(1,2,1)
             plt.imshow(N_frames[0])
-            ff.add_subplot(2,3,2)
-            plt.imshow(N_frames[1])
-            ff.add_subplot(2,3,3)
-            plt.imshow(N_frames[2])
-            ff.add_subplot(2,3,4)
+            ff.add_subplot(1,2,2)
             plt.imshow(N_masks[0,:,:,hh])
-            ff.add_subplot(2,3,5)
-            plt.imshow(N_masks[1,:,:,hh])
-            ff.add_subplot(2,3,6)
-            plt.imshow(N_masks[2,:,:,hh])
             plt.show(block=True) 
             
             input("Press Enter to continue...") 
