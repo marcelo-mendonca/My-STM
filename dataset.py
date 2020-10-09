@@ -1,9 +1,8 @@
-import os
+
 import os.path
 import numpy as np
 from PIL import Image
 import torch
-#import torchvision
 from torch.utils import data
 import glob
 import random
@@ -16,10 +15,12 @@ from skimage.morphology import disk
 from skimage.filters.rank import modal
 from dataset_pretrain import All_to_onehot, bbox2
 
+FIXED_SIZE = (200, 200)
+DATAROOT = '../rvos-master/databases'
 
 ############################ YOUTUBE TRAIN ################################
 class Youtube_MO_Train(data.Dataset):    
-    def __init__(self, data_root, imset='train-train-meta.json', resolution='480p', single_object=False, frame_skip=5):
+    def __init__(self, data_root, imset='train-train-meta.json', resolution='480p', single_object=False, frame_skip=5, fixed_size=(384,384)):
         #../rvos-master/databases/YouTubeVOS/train
         data_folder = 'YouTubeVOS/train'
         root = os.path.join(data_root, data_folder)        
@@ -38,7 +39,7 @@ class Youtube_MO_Train(data.Dataset):
         self.num_objects = {}
         self.train_triplets = {}
         self.frame_skip = frame_skip
-        self.fixed_size = (384, 384) #(100, 100)
+        self.fixed_size = fixed_size
         self.frame_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), 
                                      RangeNormalize(0, 1), RandomBrightness(-0.1, 0.1)])
         self.mask_transf = Compose([ToTensor(), AddChannel(axis=0), TypeCast('float')])
@@ -133,7 +134,7 @@ class Youtube_MO_Train(data.Dataset):
 
 ############################ DAVIS TRAIN ################################
 class DAVIS_MO_Train(data.Dataset):    
-    def __init__(self, data_root, imset='2017/train.txt', resolution='480p', single_object=False, frame_skip=5):
+    def __init__(self, data_root, imset='2017/train.txt', resolution='480p', single_object=False, frame_skip=5, fixed_size=(384,384)):
         #../rvos-master/databases/DAVIS2017
         data_folder = 'DAVIS2017'
         root = os.path.join(data_root, data_folder)        
@@ -151,7 +152,7 @@ class DAVIS_MO_Train(data.Dataset):
         self.num_objects = {}
         self.train_triplets = {}
         self.frame_skip = frame_skip
-        self.fixed_size = (384, 384) #(100, 100)
+        self.fixed_size = fixed_size
         self.frame_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), 
                                      RangeNormalize(0, 1), RandomBrightness(-0.1, 0.1)])
         self.mask_transf = Compose([ToTensor(), AddChannel(axis=0), TypeCast('float')])
@@ -244,7 +245,7 @@ class DAVIS_MO_Train(data.Dataset):
             
 ############################ YOUTUBE VALIDATION ###############################
 class Youtube_MO_Val(data.Dataset):    
-    def __init__(self, data_root, imset='train-val-meta.json', resolution='480p', single_object=False):
+    def __init__(self, data_root, imset='train-val-meta.json', resolution='480p', single_object=False, fixed_size=(384,384)):
         #../rvos-master/databases/YouTubeVOS/train
         data_folder = 'YouTubeVOS/train'
         root = os.path.join(data_root, data_folder)
@@ -262,7 +263,7 @@ class Youtube_MO_Val(data.Dataset):
         self.mask_paths = {}
         self.num_objects = {}
         self.batch_frames = {}
-        self.fixed_size = (384,384)
+        self.fixed_size = fixed_size
         self.frame_transf = Compose([ToTensor(), TypeCast('float'), RangeNormalize(0, 1)])
         self.mask_transf = Compose([ToTensor(), TypeCast('float')])
         idx = 0 
@@ -339,7 +340,7 @@ class Youtube_MO_Val(data.Dataset):
     
 ############################ DAVIS VALIDATION ################################
 class DAVIS_MO_Val(data.Dataset):
-    def __init__(self, data_root, imset='2017/val.txt', resolution='480p', single_object=False):
+    def __init__(self, data_root, imset='2017/val.txt', resolution='480p', single_object=False, fixed_size=(384,384)):
         #../rvos-master/databases/DAVIS2017
         data_folder = 'DAVIS2017'
         root = os.path.join(data_root, data_folder)
@@ -355,7 +356,7 @@ class DAVIS_MO_Val(data.Dataset):
         self.num_frames = {}
         self.num_objects = {}
         self.batch_frames = {}
-        self.fixed_size = (384,384)
+        self.fixed_size = fixed_size
         self.frame_transf = Compose([ToTensor(), TypeCast('float'), RangeNormalize(0, 1)])
         self.mask_transf = Compose([ToTensor(), TypeCast('float')])
         idx = 0
@@ -584,30 +585,24 @@ if __name__ == '__main__':
     frame_skip = 5
     ##########
     
-    DATA_ROOT = '../rvos-master/databases'
-    YEAR = 17
-    SET = 'train'
+
     
     # Davis trainset
-    davis_Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p',
-                                    imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16), frame_skip=frame_skip)
+    davis_Trainset = DAVIS_MO_Train(DATAROOT, frame_skip=frame_skip, fixed_size=FIXED_SIZE)
     
     # Youtube trainset
-    youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p', 
-                                        imset='train-train-meta.json', single_object=False, frame_skip=frame_skip)
+    youtube_Trainset = Youtube_MO_Train(DATAROOT, frame_skip=frame_skip, fixed_size=FIXED_SIZE)
     # Youtube valset
-    youtube_Valset = Youtube_MO_Val(DATA_ROOT, resolution='480p', 
-                                            imset='train-val-meta.json', single_object=False)
+    youtube_Valset = Youtube_MO_Val(DATAROOT, fixed_size=FIXED_SIZE)
     # Davis valset
-    davis_Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', 
-                                        imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
+    davis_Valset = DAVIS_MO_Val(DATAROOT, fixed_size=FIXED_SIZE)
     
     #concat DAVIS + Youtube
     trainset = data.ConcatDataset([davis_Trainset]+[youtube_Trainset])
     #print('trainset instanciado, lenght: ', len(trainset))
     
     #train data loader
-    trainloader = data.DataLoader(davis_Valset, batch_size=1, shuffle=True, num_workers=2)
+    trainloader = data.DataLoader(trainset, batch_size=1, shuffle=True, num_workers=2)
     #print('trainloader instanciado, lenght: ', len(trainloader))
     ##########
     

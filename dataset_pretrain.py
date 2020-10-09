@@ -6,32 +6,25 @@ Created on Mon Sep  7 15:13:38 2020
 @author: marcelo
 """
 
-import os
 import os.path
 import numpy as np
 from PIL import Image
-
 import torch
-#import torchvision
 from torch.utils import data
-
-import glob
 import random
-import json
-from easydict import EasyDict as edict
 from torchsample.transforms import RandomAffine, RandomCrop, ToTensor, ChannelsFirst, AddChannel
 from torchsample.transforms import ChannelsLast, Compose, RandomBrightness, RangeNormalize, TypeCast
 import matplotlib.pyplot as plt
 from pycocotools.coco import COCO
 import scipy.io
-#from itertools import cycle
 
-
+FIXED_SIZE = (200, 200)
+DATAROOT = '../rvos-master/databases'
 ############################ Coco Background ################################  
 
 class coco_background_loader():
     
-    def __init__(self, data_root, imset='val', year='2017'):
+    def __init__(self, data_root, imset='val', year='2017', fixed_size=(384,384)):
         data_folder = 'COCO'
         root = os.path.join(data_root, data_folder)
         if not os.path.isdir(root):
@@ -45,7 +38,7 @@ class coco_background_loader():
         self.coco = COCO(annFile)
         self.img_ids = self.coco.getImgIds()
         self.num_imgs = len(self.img_ids)
-        self.fixed_size = (384, 384)
+        self.fixed_size = fixed_size
     
     def get_background(self):        
         idx = random.randint(0, self.num_imgs-1)
@@ -56,13 +49,11 @@ class coco_background_loader():
         h = img_data[0]['height']       
         
         return img_path, w, h
-        
-
 
 
 ####################### Instanciate global objects########################## 
 print('COCO Dataset----------------------')
-coco_bg = coco_background_loader(data_root='../rvos-master/databases')
+coco_bg = coco_background_loader(data_root=DATAROOT, fixed_size=FIXED_SIZE)
 print('-------------------------Completed!')
 
 bg_affine = RandomAffine(rotation_range=20, shear_range=10, zoom_range=(0.9, 1.1))
@@ -81,7 +72,7 @@ fg_mask_transf = Compose([ToTensor(), AddChannel(axis=0), TypeCast('float'),
 ################### Pascal VOC #####################
 class VOC_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='train', year='2012'):
+    def __init__(self, data_root, imset='train', year='2012', fixed_size=(384,384)):
         #../rvos-master/databases/VOC
         data_folder = 'VOC'
         root = os.path.join(data_root, data_folder)
@@ -94,7 +85,7 @@ class VOC_dataset(data.Dataset):
         self.mask_dir = os.path.join(voc_root, 'SegmentationObject')            
         splits_dir = os.path.join(voc_root, 'ImageSets/Segmentation')
         split_f = os.path.join(splits_dir, imset.rstrip('\n') + '.txt')
-        self.fixed_size = (384, 384)
+        self.fixed_size = fixed_size
         self.k = 11
         
         with open(os.path.join(split_f), "r") as f:
@@ -128,7 +119,7 @@ class VOC_dataset(data.Dataset):
 ##################### ECSSD #######################
 class ECSSD_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='', year=''):
+    def __init__(self, data_root, imset='', year='', fixed_size=(384,384)):
         #../rvos-master/databases/ECSSD
         data_folder = 'ECSSD'
         root = os.path.join(data_root, data_folder)
@@ -137,7 +128,7 @@ class ECSSD_dataset(data.Dataset):
                
         self.image_dir = os.path.join(root, 'images')
         self.mask_dir = os.path.join(root, 'ground_truth_mask')
-        self.fixed_size = (384, 384)
+        self.fixed_size = fixed_size
         self.k = 11        
         
         self.img_list = ['{:04d}'.format(x) for x in range (1, 1001) ]
@@ -167,7 +158,7 @@ class ECSSD_dataset(data.Dataset):
 ##################### MSRA #######################
 class MSRA_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='', year=''):
+    def __init__(self, data_root, imset='', year='', fixed_size=(384,384)):
         #../rvos-master/databases/MSRA
         data_folder = 'MSRA'
         root = os.path.join(data_root, data_folder)
@@ -177,7 +168,7 @@ class MSRA_dataset(data.Dataset):
         base_dir = os.path.join(root, 'MSRA10K_Imgs_GT')
         self.image_dir = os.path.join(base_dir, 'Imgs')
         self.mask_dir = os.path.join(base_dir, 'Imgs')
-        self.fixed_size = (384, 384)
+        self.fixed_size = fixed_size
         self.k = 11        
         
         self.img_list = []
@@ -210,7 +201,7 @@ class MSRA_dataset(data.Dataset):
 ##################### SBD #######################
 class SBD_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='train.txt', year=''):
+    def __init__(self, data_root, imset='train.txt', year='', fixed_size=(384,384)):
         #../rvos-master/databases/SBD
         data_folder = 'SBD'
         root = os.path.join(data_root, data_folder)
@@ -221,7 +212,7 @@ class SBD_dataset(data.Dataset):
         _imset_f = os.path.join(base_dir, imset)
         self.image_dir = os.path.join(base_dir, 'img')
         self.mask_dir = os.path.join(base_dir, 'inst')
-        self.fixed_size = (384, 384)
+        self.fixed_size = fixed_size
         self.k = 11        
         
         self.img_list = []        
@@ -255,7 +246,7 @@ class SBD_dataset(data.Dataset):
 ##################### COCO #######################
 class COCO_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='val', year='2017'):
+    def __init__(self, data_root, imset='val', year='2017', fixed_size=(384,384)):
         data_folder = 'COCO'
         root = os.path.join(data_root, data_folder)
         if not os.path.isdir(root):
@@ -268,7 +259,7 @@ class COCO_dataset(data.Dataset):
         
         self.coco = COCO(self.annFile)
         self.img_ids = self.coco.getImgIds()
-        self.fixed_size = (384, 384)
+        self.fixed_size = fixed_size
         self.k = 11  
         
     def __getitem__(self, idx):        
@@ -534,21 +525,23 @@ if __name__ == "__main__":
     print('inicio') 
                 
     #input("Press Enter to continue...") 
-
     
-    VOC_trainset = VOC_dataset(data_root='../rvos-master/databases', year='2012', imset='train')
+    VOC_trainset = VOC_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
     
-    ECSSD_trainset = ECSSD_dataset(data_root='../rvos-master/databases')
+    ECSSD_trainset = ECSSD_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
     
-    MSRA_trainset = MSRA_dataset(data_root='../rvos-master/databases')
+    MSRA_trainset = MSRA_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
     
-    SBD_trainset = SBD_dataset(data_root='../rvos-master/databases')
+    SBD_trainset = SBD_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
     
-    COCO_trainset = COCO_dataset(data_root='../rvos-master/databases')
+    COCO_trainset = COCO_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
     
-    trainloader = data.DataLoader(COCO_trainset, batch_size=1,
+    trainset = data.ConcatDataset([VOC_trainset]+[ECSSD_trainset]+[MSRA_trainset]+[SBD_trainset]+[COCO_trainset])
+    
+    trainloader = data.DataLoader(trainset, batch_size=1,
                                           shuffle=True, num_workers=0)
     print('trainloader instanciado, lenght: ', len(trainloader))
+    
     
     dataiter = iter(trainloader)
     

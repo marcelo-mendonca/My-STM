@@ -4,6 +4,7 @@ Created on Fri Jan 24 11:37:55 2020
 
 @author: Marcelo
 """
+from config import cfg
 import torch
 import sys
 import argparse
@@ -19,39 +20,30 @@ import logging
 import time
 ### My libs
 from dataset import DAVIS_MO_Train, DAVIS_MO_Val, Youtube_MO_Train, Youtube_MO_Val
+from dataset_pretrain import VOC_dataset, ECSSD_dataset, MSRA_dataset, SBD_dataset, COCO_dataset
 from model import STM
 from helpers import *
 
 # Constants
 MODEL_DIR = 'saved_models'
 os.makedirs(MODEL_DIR, exist_ok=True)
-NUM_EPOCHS = 1000
+NUM_EPOCHS = 60
 
-def main():
-    print(">>>>\nMy STM training starting...")    
-    print('Python version: ', sys.version)   
-    print('Pytorch version: ', torch.__version__)    
-    run_train()
 
 def get_arguments():
     """
     Parse input arguments
     """
     parser = argparse.ArgumentParser(description="SST")
-    parser.add_argument("-g", type=str, help="0; 0,1; 0,3; etc", required=True)
-    parser.add_argument("-s", type=str, help="set", required=True)
-    parser.add_argument("-y", type=int, help="year", required=True)
-    parser.add_argument("-viz", help="Save visualization", action="store_true")
-    parser.add_argument("-D", type=str, help="path to data",default='/local/DATA')
-    #new ones:
-    
+    #vizualize partials
+    parser.add_argument("-viz", help="Save visualization", action="store_true")    
     # resume trained model
     parser.add_argument('--loadepoch', dest='loadepoch', help='epoch to load model',
                       default=-1, type=int)
     parser.add_argument('--output_dir', dest='output_dir',
                       help='output directory',
                       default=MODEL_DIR, type=str)
-    # config
+    # configs
     parser.add_argument('--epochs', dest='num_epochs',
                       help='number of epochs to train',
                       default=NUM_EPOCHS, type=int)
@@ -61,62 +53,52 @@ def get_arguments():
     parser.add_argument('--eval_epoch', dest='eval_epoch',
                       help='interval of epochs to perform validation',
                       default=10, type=int)
-    
-    #return
     return parser.parse_args()
 
-def get_dataloader(DATA_ROOT, YEAR, SET, batch_size, frame_skip, datasets=['youtube', 'davis'], phase='main_train'):
-    
-    if phase == 'main_train':    
+def get_dataloader(data_root, batch_size, frame_skip, datasets, phase='main_train'):    
+    if phase == 'main_train':
+        datasets = cfg.MAIN_TRAIN_DATASETS
+        trainset = []
         if 'davis' in datasets:   
-            # DAVIS trainset
-            davis_Trainset = DAVIS_MO_Train(DATA_ROOT, resolution='480p',
-                                            imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16), frame_skip=frame_skip)
-            Trainset = davis_Trainset
+            trainset += datasets['davis'] * [DAVIS_MO_Train(data_root=data_root, frame_skip=frame_skip)]            
         if 'youtube' in datasets:
-            # Youtube trainset
-            youtube_Trainset = Youtube_MO_Train(DATA_ROOT, resolution='480p',
-                                                imset='train-train-meta.json', single_object=False, frame_skip=frame_skip)
-            Trainset = youtube_Trainset
-        if 'davis' in datasets and 'youtube' in datasets:
-            #concat DAVIS + Youtube
-            Trainset = data.ConcatDataset(5*[davis_Trainset]+[youtube_Trainset])    
-        #train data loader
-        return data.DataLoader(Trainset, batch_size=batch_size, shuffle=True, num_workers=1)
+            trainset += datasets['youtube'] * [Youtube_MO_Train(data_root=data_root, frame_skip=frame_skip)]
+        return data.DataLoader(data.ConcatDataset(trainset), batch_size=batch_size, shuffle=True, num_workers=2)
         
     elif phase == 'validation':
-        if 'davis' in datasets:        
-            davis_Valset = DAVIS_MO_Val(DATA_ROOT, resolution='480p', 
-                                        imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-            Valset = davis_Valset
+        datasets = cfg.VAL_DATASETS
+        valset = []
+        if 'davis' in datasets:   
+            valset += datasets['davis'] * [DAVIS_MO_Val(data_root=data_root)]            
         if 'youtube' in datasets:
-            youtube_Valset = Youtube_MO_Val(DATA_ROOT, resolution='480p', 
-                                            imset='train-val-meta.json', single_object=False)
-            Valset = youtube_Valset
-        if 'davis' in datasets and 'youtube' in datasets:        
-            Valset = data.ConcatDataset(5*[davis_Valset]+[youtube_Valset])
-        return data.DataLoader(Valset, batch_size=batch_size, shuffle=True, num_workers=1)
+            valset += datasets['youtube'] * [Youtube_MO_Val(data_root=data_root)]
+        return data.DataLoader(data.ConcatDataset(valset), batch_size=batch_size, shuffle=False, num_workers=2)
     
     elif phase == 'pre_train':
-        print('phase: pre_train')
-        return
-    #Testset = DAVIS_MO_Test(DATA_ROOT, resolution='480p', imset='20{}/{}.txt'.format(YEAR,SET), single_object=(YEAR==16))
-    #Testloader = data.DataLoader(Testset, batch_size=1, shuffle=True, num_workers=1)
+        datasets = cfg.PRE_TRAIN_DATASETS
+        pretrainset = []
+        if 'voc' in datasets:
+            pretrainset += datasets['voc'] * [VOC_dataset(data_root=data_root)]
+        if 'ecssd' in datasets:
+            pretrainset += datasets['ecssd'] * [ECSSD_dataset(data_root=data_root)]
+        if 'msra' in datasets:
+            pretrainset += datasets['msra'] * [MSRA_dataset(data_root=data_root)]
+        if 'sbd' in datasets:
+            pretrainset += datasets['sbd'] * [SBD_dataset(data_root=data_root)]
+        if 'coco' in datasets:
+            pretrainset += datasets['coco'] * [COCO_dataset(data_root=data_root)]        
+        return data.DataLoader(data.ConcatDataset(pretrainset), batch_size=batch_size, shuffle=True, num_workers=2)
 
 def run_train():    
     # get arguments
-    args = get_arguments()    
-    GPU = args.g
-    YEAR = args.y
-    SET = args.s
+    args = get_arguments()
     #VIZ = args.viz
-    DATA_ROOT = args.D
-    datasets=['youtube', 'davis']
+    DATA_ROOT = cfg.DATA_ROOT
+    datasets= cfg.MAIN_TRAIN_DATASETS
     
     # Model and version
     MODEL = 'STM'
     print(MODEL, ': Using Dataset', datasets)    
-    os.environ['CUDA_VISIBLE_DEVICES'] = GPU
     print('--- CUDA:')
     
     # Device infos
@@ -187,9 +169,9 @@ def run_train():
         print('  - complete!')       
     
     # instantiate dataloaders
-    Trainloader = get_dataloader(DATA_ROOT, YEAR, SET, train_batch_size, 
+    Trainloader = get_dataloader(DATA_ROOT, train_batch_size, 
                                  frame_skip, datasets=datasets, phase='main_train')
-    Valloader = get_dataloader(DATA_ROOT, YEAR, SET, val_batch_size, 
+    Valloader = get_dataloader(DATA_ROOT, val_batch_size, 
                                frame_skip, datasets=datasets, phase='validation')
     iters_per_epoch = len(Trainloader)
     
@@ -204,7 +186,7 @@ def run_train():
             frame_skip = min([frame_skip+5, 25])
             
             #instantiate datasets and dataloader again with updated frame skip
-            Trainloader = get_dataloader(DATA_ROOT, YEAR, SET, train_batch_size, 
+            Trainloader = get_dataloader(DATA_ROOT, train_batch_size, 
                                          frame_skip, datasets=datasets, phase='main_train')
         
         model.eval() #set eval mode to disable batchnorm and dropout
@@ -402,9 +384,13 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
 
 
         
-if __name__ == "__main__":
+if __name__ == "__main__":    
     
-    main()
+    print(">>>>\nMy STM starting...")    
+    print('Python version: ', sys.version)   
+    print('Pytorch version: ', torch.__version__)    
+    run_train()
+    
     
     
            
