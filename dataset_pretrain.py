@@ -5,7 +5,7 @@ Created on Mon Sep  7 15:13:38 2020
 
 @author: marcelo
 """
-
+from config import cfg
 import os.path
 import numpy as np
 from PIL import Image
@@ -18,77 +18,71 @@ import matplotlib.pyplot as plt
 from pycocotools.coco import COCO
 import scipy.io
 
-FIXED_SIZE = (200, 200)
-DATAROOT = '../rvos-master/databases'
+
 ############################ Coco Background ################################  
 
-class coco_background_loader():
-    
-    def __init__(self, data_root, imset='val', year='2017', fixed_size=(384,384)):
-        data_folder = 'COCO'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+class coco_img_loader():    
+    def __init__(self, data_root, imsets=['val'], year='2017', fixed_size={'val': (384,384)}):
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
+            
+        self.image_dir = {}
+        self.imsets = imsets
+        self.coco = {}
+        self.img_ids = {}
+        self.num_imgs = {}
+        self.fixed_size = {}
         
-        set_year = '{}{}'.format(imset,year)
-        self.image_dir = os.path.join(root, 'images',set_year)
-        ann_dir = os.path.join(root, 'annotations')
-        annFile = os.path.join(ann_dir, 'instances_{}.json'.format(set_year))
-        
-        self.coco = COCO(annFile)
-        self.img_ids = self.coco.getImgIds()
-        self.num_imgs = len(self.img_ids)
-        self.fixed_size = fixed_size
+        for imset in self.imsets:        
+            set_year = '{}{}'.format(imset,year)
+            self.image_dir[imset] = os.path.join(data_root, 'images',set_year)
+            ann_dir = os.path.join(data_root, 'annotations')
+            annFile = os.path.join(ann_dir, 'instances_{}.json'.format(set_year))
+            
+            self.coco[imset] = COCO(annFile)
+            self.img_ids[imset] = self.coco[imset].getImgIds()
+            self.num_imgs[imset] = len(self.img_ids[imset])
+            self.fixed_size[imset] = fixed_size[imset]
     
-    def get_background(self):        
-        idx = random.randint(0, self.num_imgs-1)
-        img_id = self.img_ids[idx]
-        img_data = self.coco.loadImgs(img_id)
-        img_path = os.path.join(self.image_dir,img_data[0]['file_name'])       
+    def get_random_img(self, imset):        
+        idx = random.randint(0, self.num_imgs[imset]-1)
+        img_id = self.img_ids[imset][idx]
+        img_data = self.coco[imset].loadImgs(img_id)
+        img_path = os.path.join(self.image_dir[imset],img_data[0]['file_name'])       
         w = img_data[0]['width']
         h = img_data[0]['height']       
         
         return img_path, w, h
-
-
-####################### Instanciate global objects########################## 
-print('COCO Dataset----------------------')
-coco_bg = coco_background_loader(data_root=DATAROOT, fixed_size=FIXED_SIZE)
-print('-------------------------Completed!')
-
-bg_affine = RandomAffine(rotation_range=20, shear_range=10, zoom_range=(0.9, 1.1))
     
-bg_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), RangeNormalize(0, 1), 
-                     RandomBrightness(-0.1,0.1), bg_affine, RandomCrop(coco_bg.fixed_size), ChannelsLast()])
+    def get_loader(self, imset):
+        return self.coco[imset], self.img_ids[imset], self.num_imgs[imset], self.image_dir[imset]
 
-fg_affine = RandomAffine(rotation_range=90, shear_range=10, zoom_range=(0.5, 1.5))
 
-fg_rgb_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), 
-                     RangeNormalize(0, 1), RandomBrightness(-0.1,0.1)])
-
-fg_mask_transf = Compose([ToTensor(), AddChannel(axis=0), TypeCast('float'), 
-                          RangeNormalize(0, 1)])
+##################### Instanciate global COCO loader ########################
+if cfg.PRETRAIN:
+    print('COCO data loader-----------------')
+    coco_bg = coco_img_loader(data_root=cfg.DATA_COCO, imsets=['train','val'], 
+                                     fixed_size={'train': cfg.TRAIN_IMG_SIZE, 'val': cfg.VAL_IMG_SIZE})
+    print('-------------------------Completed!')
 
 ################### Pascal VOC #####################
 class VOC_dataset(data.Dataset):
     
     def __init__(self, data_root, imset='train', year='2012', fixed_size=(384,384)):
-        #../rvos-master/databases/VOC
-        data_folder = 'VOC'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
-               
-        base_dir = os.path.join('VOCdevkit', 'VOC2012')
-        voc_root = os.path.join(root, base_dir)        
-        self.image_dir = os.path.join(voc_root, 'JPEGImages')
-        self.mask_dir = os.path.join(voc_root, 'SegmentationObject')            
-        splits_dir = os.path.join(voc_root, 'ImageSets/Segmentation')
-        split_f = os.path.join(splits_dir, imset.rstrip('\n') + '.txt')
+        #../rvos-master/databases/VOC/VOCdevkit/VOC2012
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
+                       
+        self.imset = imset #VOC has train and val sets
+        self.image_dir = os.path.join(data_root, 'JPEGImages')
+        self.mask_dir = os.path.join(data_root, 'SegmentationObject')            
+        splits_dir = os.path.join(data_root, 'ImageSets/Segmentation')
+        _imset = 'trainval' if imset == 'val' else imset
+        split_f = os.path.join(splits_dir, _imset + '.txt')
         self.fixed_size = fixed_size
         self.k = 11
         
-        with open(os.path.join(split_f), "r") as f:
+        with open(split_f, "r") as f:
             self.img_list = [x.strip() for x in f.readlines()]    
     
     def __getitem__(self, idx):        
@@ -101,14 +95,14 @@ class VOC_dataset(data.Dataset):
         num_objects = np.max(mask)
         
                 
-        N_frames, N_masks, num_objects = make_triplet(image, mask, num_objects, 
-                                                     triplet_size=self.fixed_size,
-                                                     k=self.k)
+        N_frames, N_masks, num_objects, is_valid = make_triplet(image, mask, num_objects, 
+                                                                triplet_size=self.fixed_size,
+                                                                k=self.k, imset=self.imset)     
         
         info = {}
         info['name'] = self.img_list[idx]
         info['num_frames'] = N_frames.shape[1]
-        info['valid_samples'] = [True, True, True]
+        info['valid_samples'] = is_valid
         
         return N_frames, N_masks, num_objects, info
 
@@ -119,15 +113,14 @@ class VOC_dataset(data.Dataset):
 ##################### ECSSD #######################
 class ECSSD_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='', year='', fixed_size=(384,384)):
+    def __init__(self, data_root, imset='train', year='', fixed_size=(384,384)):
         #../rvos-master/databases/ECSSD
-        data_folder = 'ECSSD'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
                
-        self.image_dir = os.path.join(root, 'images')
-        self.mask_dir = os.path.join(root, 'ground_truth_mask')
+        self.imset = imset #ECSSD has only train set
+        self.image_dir = os.path.join(data_root, 'images')
+        self.mask_dir = os.path.join(data_root, 'ground_truth_mask')
         self.fixed_size = fixed_size
         self.k = 11        
         
@@ -142,13 +135,13 @@ class ECSSD_dataset(data.Dataset):
         mask = (mask/255).astype(np.uint8)
         num_objects = np.max(mask)
                 
-        N_frames, N_masks, num_objects = make_triplet(image, mask, num_objects, 
-                                                     triplet_size=self.fixed_size,
-                                                     k=self.k)        
+        N_frames, N_masks, num_objects, is_valid = make_triplet(image, mask, num_objects, 
+                                                                triplet_size=self.fixed_size,
+                                                                k=self.k, imset=self.imset)     
         info = {}
         info['name'] = self.img_list[idx]
         info['num_frames'] = N_frames.shape[1]
-        info['valid_samples'] = [True, True, True]
+        info['valid_samples'] = is_valid
         
         return N_frames, N_masks, num_objects, info
 
@@ -158,16 +151,14 @@ class ECSSD_dataset(data.Dataset):
 ##################### MSRA #######################
 class MSRA_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='', year='', fixed_size=(384,384)):
-        #../rvos-master/databases/MSRA
-        data_folder = 'MSRA'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+    def __init__(self, data_root, imset='train', year='', fixed_size=(384,384)):
+        #../rvos-master/databases/MSRA/MSRA10K_Imgs_GT
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
         
-        base_dir = os.path.join(root, 'MSRA10K_Imgs_GT')
-        self.image_dir = os.path.join(base_dir, 'Imgs')
-        self.mask_dir = os.path.join(base_dir, 'Imgs')
+        self.imset = imset #MSRA has only trainset
+        self.image_dir = os.path.join(data_root, 'Imgs')
+        self.mask_dir = os.path.join(data_root, 'Imgs')
         self.fixed_size = fixed_size
         self.k = 11        
         
@@ -185,13 +176,13 @@ class MSRA_dataset(data.Dataset):
         mask = (mask/255).astype(np.uint8)
         num_objects = np.max(mask)
                 
-        N_frames, N_masks, num_objects = make_triplet(image, mask, num_objects, 
-                                                     triplet_size=self.fixed_size,
-                                                     k=self.k)        
+        N_frames, N_masks, num_objects, is_valid = make_triplet(image, mask, num_objects, 
+                                                                triplet_size=self.fixed_size,
+                                                                k=self.k, imset=self.imset)        
         info = {}
         info['name'] = self.img_list[idx]
         info['num_frames'] = N_frames.shape[1]
-        info['valid_samples'] = [True, True, True]
+        info['valid_samples'] = is_valid
         
         return N_frames, N_masks, num_objects, info
 
@@ -201,17 +192,15 @@ class MSRA_dataset(data.Dataset):
 ##################### SBD #######################
 class SBD_dataset(data.Dataset):
     
-    def __init__(self, data_root, imset='train.txt', year='', fixed_size=(384,384)):
-        #../rvos-master/databases/SBD
-        data_folder = 'SBD'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
-        
-        base_dir = os.path.join(root, 'benchmark_RELEASE', 'dataset')
-        _imset_f = os.path.join(base_dir, imset)
-        self.image_dir = os.path.join(base_dir, 'img')
-        self.mask_dir = os.path.join(base_dir, 'inst')
+    def __init__(self, data_root, imset='train', year='', fixed_size=(384,384)):
+        #../rvos-master/databases/SBD/benchmark_RELEASE/dataset
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
+
+        self.imset = imset # SBD has train and val sets
+        _imset_f = os.path.join(data_root, imset + '.txt')
+        self.image_dir = os.path.join(data_root, 'img')
+        self.mask_dir = os.path.join(data_root, 'inst')
         self.fixed_size = fixed_size
         self.k = 11        
         
@@ -230,13 +219,13 @@ class SBD_dataset(data.Dataset):
         mask = scipy.io.loadmat(mask_path)['GTinst']['Segmentation'][0,0]
         num_objects = np.max(mask)
                 
-        N_frames, N_masks, num_objects = make_triplet(image, mask, num_objects, 
-                                                     triplet_size=self.fixed_size,
-                                                     k=self.k)        
+        N_frames, N_masks, num_objects, is_valid = make_triplet(image, mask, num_objects, 
+                                                                triplet_size=self.fixed_size,
+                                                                k=self.k, imset=self.imset)   
         info = {}
         info['name'] = self.img_list[idx]
         info['num_frames'] = N_frames.shape[1]
-        info['valid_samples'] = [True, True, True]
+        info['valid_samples'] = is_valid
         
         return N_frames, N_masks, num_objects, info
 
@@ -245,20 +234,23 @@ class SBD_dataset(data.Dataset):
 
 ##################### COCO #######################
 class COCO_dataset(data.Dataset):
-    
-    def __init__(self, data_root, imset='val', year='2017', fixed_size=(384,384)):
-        data_folder = 'COCO'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+    #../rvos-master/databases/COCO    
+    def __init__(self, data_root, imset='train', year='2017', fixed_size=(384,384)):
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))        
         
+        self.imset = imset # COCO has train and val sets
         set_year = '{}{}'.format(imset,year)
-        self.image_dir = os.path.join(root, 'images',set_year)
-        ann_dir = os.path.join(root, 'annotations')
+        self.image_dir = os.path.join(data_root, 'images',set_year)
+        ann_dir = os.path.join(data_root, 'annotations')
         self.annFile = os.path.join(ann_dir, 'instances_{}.json'.format(set_year))
         
-        self.coco = COCO(self.annFile)
-        self.img_ids = self.coco.getImgIds()
+        global coco_bg
+        try:
+            self.coco, self.img_ids, _, _ = coco_bg.get_loader(self.imset)
+        except:
+            self.coco = COCO(self.annFile)
+            self.img_ids = self.coco.getImgIds()
         self.fixed_size = fixed_size
         self.k = 11  
         
@@ -289,13 +281,13 @@ class COCO_dataset(data.Dataset):
                 break
         
         num_objects = obj_cc                
-        N_frames, N_masks, num_objects = make_triplet(image, mask, num_objects, 
-                                                     triplet_size=self.fixed_size,
-                                                     k=self.k)        
+        N_frames, N_masks, num_objects, is_valid = make_triplet(image, mask, num_objects, 
+                                                                triplet_size=self.fixed_size,
+                                                                k=self.k, imset=self.imset)        
         info = {}
         info['name'] = img_id
         info['num_frames'] = N_frames.shape[1]
-        info['valid_samples'] = [True, True, True]
+        info['valid_samples'] = is_valid
         
         return N_frames, N_masks, num_objects, info
     
@@ -304,20 +296,22 @@ class COCO_dataset(data.Dataset):
 
 ############################ AUX FUNCTIONS ################################
 
-def make_triplet(fg_frame, fg_mask, num_objects, triplet_size=(384,384), k=11):      
+def make_triplet(fg_frame, fg_mask, num_objects, triplet_size=(384,384), k=11, imset='val'):
+
+    num_objects = max(1, num_objects) #ensure at least one object
     
-    bg_triplet = make_bg_triplet(triplet_size=triplet_size)
+    bg_triplet = make_bg_triplet(triplet_size=triplet_size, imset=imset)
     
     N_frames, N_masks, num_objects = make_fg_triplet(fg_frame, fg_mask, num_objects, 
-                                                     bg_triplet, triplet_size=triplet_size)    
-    
+                                                     bg_triplet, triplet_size=triplet_size)   
+
     N_frames = N_frames.permute(3,0,1,2).float()
     
     num_objects = torch.LongTensor([num_objects])
     
     N_masks = All_to_onehot(N_masks, k).float()  
     
-    return N_frames, N_masks, num_objects
+    return N_frames, N_masks, num_objects, validate_samples(N_masks, num_objects)
 
 def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects=3, triplet_size=(384,384)):  
     
@@ -347,9 +341,17 @@ def make_fg_triplet(fg_frame, fg_mask, num_objects, bg_triplet=None, max_objects
         obj_rgb = img_pad(obj_rgb, 100)
         obj_mask = img_pad(obj_mask, 100)   
         
-        global fg_rgb_transf
-        global fg_mask_transf
-        global fg_affine
+        #global fg_rgb_transf
+        #global fg_mask_transf
+        #global fg_affine
+        
+        fg_affine = RandomAffine(rotation_range=90, shear_range=10, zoom_range=(0.5, 1.5))
+
+        fg_rgb_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), 
+                             RangeNormalize(0, 1), RandomBrightness(-0.1,0.1)])
+        
+        fg_mask_transf = Compose([ToTensor(), AddChannel(axis=0), TypeCast('float'), 
+                                  RangeNormalize(0, 1)])
         
         transf_obj_rgb = fg_rgb_transf(obj_rgb)
         transf_obj_mask = fg_mask_transf(obj_mask)
@@ -482,13 +484,12 @@ def bbox2(img):
 
     return rmin, rmax+1, cmin, cmax+1
 
-def make_bg_triplet(bg_path=None, triplet_size=(384,384)):
-    
+def make_bg_triplet(bg_path=None, triplet_size=(384,384), imset='val'):    
     #get background image
     if bg_path is None:
         global coco_bg
-        bg_path, _, _ = coco_bg.get_background()
-        #bg_path = bg_path[0]    
+        bg_path, _, _ = coco_bg.get_random_img(imset)
+            
     bg_img = Image.open(bg_path).convert('RGB')
     
     #resize background sides to be at least the same size of canvas sides
@@ -496,7 +497,12 @@ def make_bg_triplet(bg_path=None, triplet_size=(384,384)):
         
     bg_triplet = torch.zeros(3, triplet_size[0], triplet_size[1], 3)
     
-    global bg_transf
+    bg_affine = RandomAffine(rotation_range=20, shear_range=10, zoom_range=(0.9, 1.1))
+    
+    bg_transf = Compose([ToTensor(), TypeCast('float'), ChannelsFirst(), RangeNormalize(0, 1), 
+                         RandomBrightness(-0.1,0.1), bg_affine, RandomCrop(coco_bg.fixed_size[imset]), ChannelsLast()])
+    
+    #global bg_transf
     
     for t in range(3):        
         bg_triplet[t] = bg_transf(bg.copy())    
@@ -518,36 +524,69 @@ def All_to_onehot(masks, K):
         
     return Ms # Ms:  (11, 3, 384, 384)
 
+def validate_samples(N_masks, num_objects):
+    
+    if num_objects <= 0:
+        return False
+    
+    if not torch.max(N_masks[0]) > 0:
+        return False
+    elif not (torch.max(N_masks[1]) > 0 or torch.max(N_masks[2]) > 0):
+        return False
+    
+    return True
+
 
 if __name__ == "__main__":
     
     
-    print('inicio') 
-                
-    #input("Press Enter to continue...") 
-    
-    VOC_trainset = VOC_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
-    
-    ECSSD_trainset = ECSSD_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
-    
-    MSRA_trainset = MSRA_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
-    
-    SBD_trainset = SBD_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
-    
-    COCO_trainset = COCO_dataset(data_root=DATAROOT, fixed_size=FIXED_SIZE)
-    
-    trainset = data.ConcatDataset([VOC_trainset]+[ECSSD_trainset]+[MSRA_trainset]+[SBD_trainset]+[COCO_trainset])
-    
-    trainloader = data.DataLoader(trainset, batch_size=1,
-                                          shuffle=True, num_workers=0)
-    print('trainloader instanciado, lenght: ', len(trainloader))
+    print('inicio')
     
     
-    dataiter = iter(trainloader)
+    import time
+     
     
-    for cc in range(10):
+    FIXED_SIZE = (150, 150) 
+    
+    # Train
+    VOC_trainset = VOC_dataset(data_root=cfg.DATA_VOC, fixed_size=FIXED_SIZE)    
+    ECSSD_trainset = ECSSD_dataset(data_root=cfg.DATA_ECSSD, fixed_size=FIXED_SIZE)    
+    MSRA_trainset = MSRA_dataset(data_root=cfg.DATA_MSRA, fixed_size=FIXED_SIZE)    
+    SBD_trainset = SBD_dataset(data_root=cfg.DATA_SBD, fixed_size=FIXED_SIZE)    
+    COCO_trainset = COCO_dataset(data_root=cfg.DATA_COCO, fixed_size=FIXED_SIZE)    
+    trainset = data.ConcatDataset([VOC_trainset]+[ECSSD_trainset]+[MSRA_trainset]+[SBD_trainset]+[COCO_trainset])    
+    dataloader = data.DataLoader(trainset, batch_size=1, shuffle=True, num_workers=0)
+    
+    # Val
+    # VOC_valset = VOC_dataset(data_root=cfg.DATA_VOC, fixed_size=FIXED_SIZE, imset='val')    
+    # SBD_valset = SBD_dataset(data_root=cfg.DATA_SBD, fixed_size=FIXED_SIZE, imset='val')
+    # COCO_valset = COCO_dataset(data_root=cfg.DATA_COCO, fixed_size=FIXED_SIZE, imset='val')
+    # valset = data.ConcatDataset([VOC_valset]+[SBD_valset]+[COCO_valset])
+    # dataloader = data.DataLoader(valset, batch_size=1, shuffle=True, num_workers=2)
+    
+    print('dataloader lenght: ', len(dataloader))    
+    # trainloader lenght:  139249
+    # valloader lenght:  10770
+    
+    dataiter = iter(dataloader)
+    
+    #image, mask, n_obj, info = dataiter.next()
+    boa = 0
+    ruim = 0
+    t0= time.process_time()
+    for cc in range(200):
+        _, _, _, info = dataiter.next()
         
-        image, mask, n_obj, _ = dataiter.next()
+        t1 = time.process_time() - t0
+        print("{}) = {}, Time: {:.3f}".format(cc, info['valid_samples'], t1)) # CPU seconds elapsed (floating point)
+        t0 = t1
+        
+        if info['valid_samples']:
+            boa +=1
+        else:
+            ruim +=1
+    
+    print('boas {}, ruins {}'.format(boa, ruim))
         
         #image, mask, n_obj = dataiter.next()
         
@@ -557,76 +596,41 @@ if __name__ == "__main__":
         # ff.add_subplot(1,2,2)
         # plt.imshow(mask[0])
         # plt.show(block=True)
-        
+    input("Press Enter to continue...") 
     
-        N_frames = image[0].permute(1, 2, 3, 0)
-        N_masks = mask[0].permute(1, 2, 3, 0)
-        num_objects = n_obj[0].item()
+    # if False:
+    
+    #     N_frames = image[0].permute(1, 2, 3, 0)
+    #     N_masks = mask[0].permute(1, 2, 3, 0)
+    #     num_objects = n_obj[0].item()
             
-        # print('N_frames: {}, {}'.format(N_frames.shape, N_frames.dtype))    
-        # print('N_masks: {}, {}'.format(N_masks.shape, N_masks.dtype))    
-        print('num_objects: {}'.format(num_objects))
-        # # N_frames: torch.Size([1, 3, 3, 384, 384]), torch.float32
-        # # N_masks: torch.Size([1, 11, 3, 384, 384]), torch.int32
-        # # num_objects: tensor([[1]]), torch.int64
+    #     # print('N_frames: {}, {}'.format(N_frames.shape, N_frames.dtype))    
+    #     # print('N_masks: {}, {}'.format(N_masks.shape, N_masks.dtype))    
+    #     print('num_objects: {}'.format(num_objects))
+    #     # # N_frames: torch.Size([1, 3, 3, 384, 384]), torch.float32
+    #     # # N_masks: torch.Size([1, 11, 3, 384, 384]), torch.int32
+    #     # # num_objects: tensor([[1]]), torch.int64
         
        
     
-        for hh in range(1):
-            print('Mask CH: ', hh)
-            ff = plt.figure()
-            ff.add_subplot(2,3,1)
-            plt.imshow(N_frames[0])
-            ff.add_subplot(2,3,2)
-            plt.imshow(N_frames[1])
-            ff.add_subplot(2,3,3)
-            plt.imshow(N_frames[2])
-            ff.add_subplot(2,3,4)
-            plt.imshow(N_masks[0,:,:,hh])
-            ff.add_subplot(2,3,5)
-            plt.imshow(N_masks[1,:,:,hh])
-            ff.add_subplot(2,3,6)
-            plt.imshow(N_masks[2,:,:,hh])
-            plt.show(block=True) 
+    #     for hh in range(1):
+    #         print('Mask CH: ', hh)
+    #         ff = plt.figure()
+    #         ff.add_subplot(2,3,1)
+    #         plt.imshow(N_frames[0])
+    #         ff.add_subplot(2,3,2)
+    #         plt.imshow(N_frames[1])
+    #         ff.add_subplot(2,3,3)
+    #         plt.imshow(N_frames[2])
+    #         ff.add_subplot(2,3,4)
+    #         plt.imshow(N_masks[0,:,:,hh])
+    #         ff.add_subplot(2,3,5)
+    #         plt.imshow(N_masks[1,:,:,hh])
+    #         ff.add_subplot(2,3,6)
+    #         plt.imshow(N_masks[2,:,:,hh])
+    #         plt.show(block=True) 
             
-        input("Press Enter to continue...") 
-
-
-###############################################################################
-
-#coco_bg_loader = data.DataLoader(coco_bg, batch_size=1, shuffle=True, num_workers=1)
-#coco_bg_cycle = cycle(coco_bg_loader)
-
-# class coco_background(data.Dataset):
-    
-#     def __init__(self, data_root, imset='val', year='2017'):
-#         data_folder = 'COCO'
-#         root = os.path.join(data_root, data_folder)
-#         if not os.path.isdir(root):
-#             raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
-        
-#         self.root = root 
-#         set_year = '{}{}'.format(imset,year)
-#         self.image_dir = os.path.join(self.root, 'images',set_year)
-#         ann_dir = os.path.join(self.root, 'annotations')
-#         self.annFile = os.path.join(ann_dir, 'instances_{}.json'.format(set_year))
-        
-#         self.coco = COCO(self.annFile)
-#         self.img_ids = self.coco.getImgIds()
-#         self.fixed_size = (384, 384)   
-        
-#     def __getitem__(self, idx):
-        
-#         img_id = self.img_ids[idx]
-#         img_data = self.coco.loadImgs(img_id)
-#         img_path = os.path.join(self.image_dir,img_data[0]['file_name'])       
-#         w = img_data[0]['width']
-#         h = img_data[0]['height']       
-        
-#         return img_path, w, h
-    
-#     def __len__(self):
-#         return len(self.img_ids)
+    #     input("Press Enter to continue...") 
 
 
 

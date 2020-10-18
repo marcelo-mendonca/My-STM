@@ -1,4 +1,5 @@
 
+from config import cfg
 import os.path
 import numpy as np
 from PIL import Image
@@ -13,24 +14,21 @@ from torchsample.transforms import ChannelsLast, Compose, RandomBrightness, Rang
 import matplotlib.pyplot as plt
 from skimage.morphology import disk
 from skimage.filters.rank import modal
-from dataset_pretrain import All_to_onehot, bbox2
+from dataset_pretrain import All_to_onehot, bbox2, validate_samples
 
-FIXED_SIZE = (200, 200)
-DATAROOT = '../rvos-master/databases'
 
 ############################ YOUTUBE TRAIN ################################
 class Youtube_MO_Train(data.Dataset):    
-    def __init__(self, data_root, imset='train-train-meta.json', resolution='480p', single_object=False, frame_skip=5, fixed_size=(384,384)):
+    def __init__(self, data_root, imset='train', resolution='480p', single_object=False, frame_skip=5, fixed_size=(384,384)):
         #../rvos-master/databases/YouTubeVOS/train
-        data_folder = 'YouTubeVOS/train'
-        root = os.path.join(data_root, data_folder)        
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
         
-        mask_dir = os.path.join(root, 'Annotations')
-        image_dir = os.path.join(root, 'JPEGImages')
-        _imset_dir = os.path.join(root)
-        _imset_f = os.path.join(_imset_dir, imset)
+        mask_dir = os.path.join(data_root, 'train', 'Annotations')
+        image_dir = os.path.join(data_root, 'train', 'JPEGImages')
+        _imset_dir = os.path.join(data_root, 'train')
+        _imset = 'train-train-meta.json' if imset == 'train' else 'train-val-meta.json'
+        _imset_f = os.path.join(_imset_dir, _imset)
         
         self.videos = []
         self.num_frames = {}
@@ -76,8 +74,6 @@ class Youtube_MO_Train(data.Dataset):
         train_triplet =  Skip_frames(self.train_triplets[index][1], self.frame_skip, self.num_frames[video])
         #train_triplet = (t1, t2, t3) -> sequence for getting frames at t1 < t2 < t3
         
-        valid_samples = [False, False, False]
-        
         for idx, f in enumerate(train_triplet):
             
             frame_path = self.frame_paths[video][f]
@@ -108,10 +104,8 @@ class Youtube_MO_Train(data.Dataset):
             N_masks[idx], _ = random_crop(new_mask, self.fixed_size, bbox, coord)            
             #N_frames: torch (n, w=fixed_size[0], h=fixed_size[1], c) -> torch.float32
             #N_masks: torch (n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
-            
-            valid_samples[idx] = (torch.max(N_masks[idx]) > 0).item()
         
-        info['valid_samples'] = valid_samples      
+        info['valid_samples'] = validate_samples(N_masks, self.num_objects[video])      
         N_frames = N_frames.permute(3, 0, 1, 2)
         if self.single_object:
             N_masks = (N_masks > 0.5).int() * (N_masks < 255).int()
@@ -134,18 +128,17 @@ class Youtube_MO_Train(data.Dataset):
 
 ############################ DAVIS TRAIN ################################
 class DAVIS_MO_Train(data.Dataset):    
-    def __init__(self, data_root, imset='2017/train.txt', resolution='480p', single_object=False, frame_skip=5, fixed_size=(384,384)):
+    def __init__(self, data_root, imset='train', resolution='480p', single_object=False, frame_skip=5, fixed_size=(384,384)):
         #../rvos-master/databases/DAVIS2017
-        data_folder = 'DAVIS2017'
-        root = os.path.join(data_root, data_folder)        
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
         
-        self.mask_dir = os.path.join(root, 'Annotations', resolution)
+        self.mask_dir = os.path.join(data_root, 'Annotations', resolution)
         #self.mask480_dir = os.path.join(root, 'Annotations', '480p')
-        self.image_dir = os.path.join(root, 'JPEGImages', resolution)
-        _imset_dir = os.path.join(root, 'ImageSets')
-        _imset_f = os.path.join(_imset_dir, imset)
+        self.image_dir = os.path.join(data_root, 'JPEGImages', resolution)
+        _imset_dir = os.path.join(data_root, 'ImageSets')
+        _imset = '2017/train.txt' if imset == 'train' else '2017/val.txt'
+        _imset_f = os.path.join(_imset_dir, _imset)
 
         self.videos = []
         self.num_frames = {}
@@ -188,8 +181,6 @@ class DAVIS_MO_Train(data.Dataset):
         train_triplet =  Skip_frames(self.train_triplets[index][1], self.frame_skip, self.num_frames[video])
         #train_triplet = (t1, t2, t3) -> sequence for getting frames at t1 < t2 < t3
         
-        valid_samples = [False, False, False]
-        
         for idx, f in enumerate(train_triplet):
             
             frame_path = os.path.join(self.image_dir, video, '{:05d}.jpg'.format(f))
@@ -220,10 +211,8 @@ class DAVIS_MO_Train(data.Dataset):
             N_masks[idx], _ = random_crop(new_mask, self.fixed_size, bbox, coord)
             #N_frames: torch (n, w=fixed_size[0], h=fixed_size[1], c) -> torch.float32
             #N_masks: torch (n, w=fixed_size[0], h=fixed_size[1]) -> torch.float32
-            
-            valid_samples[idx] = (torch.max(N_masks[idx]) > 0).item()
         
-        info['valid_samples'] = valid_samples
+        info['valid_samples'] = validate_samples(N_masks, self.num_objects[video])
         N_frames = N_frames.permute(3, 0, 1, 2)
         if self.single_object:
             N_masks = (N_masks > 0.5).int() * (N_masks < 255).int()
@@ -245,17 +234,16 @@ class DAVIS_MO_Train(data.Dataset):
             
 ############################ YOUTUBE VALIDATION ###############################
 class Youtube_MO_Val(data.Dataset):    
-    def __init__(self, data_root, imset='train-val-meta.json', resolution='480p', single_object=False, fixed_size=(384,384)):
+    def __init__(self, data_root, imset='val', resolution='480p', single_object=False, fixed_size=(384,384)):
         #../rvos-master/databases/YouTubeVOS/train
-        data_folder = 'YouTubeVOS/train'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
         
-        mask_dir = os.path.join(root, 'Annotations')
-        image_dir = os.path.join(root, 'JPEGImages')
-        _imset_dir = os.path.join(root)
-        _imset_f = os.path.join(_imset_dir, imset)
+        mask_dir = os.path.join(data_root, 'train', 'Annotations')
+        image_dir = os.path.join(data_root, 'train', 'JPEGImages')
+        _imset_dir = os.path.join(data_root, 'train')
+        _imset = 'train-val-meta.json' if imset == 'val' else 'train-train-meta.json' 
+        _imset_f = os.path.join(_imset_dir, _imset)
         
         self.videos = []
         self.num_frames = {}
@@ -289,6 +277,7 @@ class Youtube_MO_Val(data.Dataset):
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
+        info['valid_samples'] = True
         
         N_frames = torch.zeros(1, self.fixed_size[0], self.fixed_size[1], 3)
         N_masks = torch.zeros(1, self.fixed_size[0], self.fixed_size[1]) 
@@ -340,17 +329,16 @@ class Youtube_MO_Val(data.Dataset):
     
 ############################ DAVIS VALIDATION ################################
 class DAVIS_MO_Val(data.Dataset):
-    def __init__(self, data_root, imset='2017/val.txt', resolution='480p', single_object=False, fixed_size=(384,384)):
+    def __init__(self, data_root, imset='val', resolution='480p', single_object=False, fixed_size=(384,384)):
         #../rvos-master/databases/DAVIS2017
-        data_folder = 'DAVIS2017'
-        root = os.path.join(data_root, data_folder)
-        if not os.path.isdir(root):
-            raise RuntimeError('Dataset not found or corrupted: {}'.format(root))
+        if not os.path.isdir(data_root):
+            raise RuntimeError('Dataset not found or corrupted: {}'.format(data_root))
         
-        self.mask_dir = os.path.join(root, 'Annotations', resolution)
-        self.image_dir = os.path.join(root, 'JPEGImages', resolution)
-        _imset_dir = os.path.join(root, 'ImageSets')
-        _imset_f = os.path.join(_imset_dir, imset)
+        self.mask_dir = os.path.join(data_root, 'Annotations', resolution)
+        self.image_dir = os.path.join(data_root, 'JPEGImages', resolution)
+        _imset_dir = os.path.join(data_root, 'ImageSets')
+        _imset = '2017/val.txt' if imset == 'val' else '2017/train.txt'
+        _imset_f = os.path.join(_imset_dir, _imset)
         
         self.videos = []
         self.num_frames = {}
@@ -381,6 +369,7 @@ class DAVIS_MO_Val(data.Dataset):
         info = {}
         info['name'] = video
         info['num_frames'] = self.num_frames[video]
+        info['valid_samples'] = True
         
         N_frames = torch.zeros(1, self.fixed_size[0], self.fixed_size[1], 3)
         N_masks = torch.zeros(1, self.fixed_size[0], self.fixed_size[1]) 
@@ -581,50 +570,69 @@ if __name__ == '__main__':
     
     print('inicio')
     
-    
+    import time
+    FIXED_SIZE = (150, 150)
     frame_skip = 5
     ##########
     
 
-    
+    # TRAIN
     # Davis trainset
-    davis_Trainset = DAVIS_MO_Train(DATAROOT, frame_skip=frame_skip, fixed_size=FIXED_SIZE)
-    
+    davis_Trainset = DAVIS_MO_Train(data_root=cfg.DATA_DAVIS, frame_skip=frame_skip, fixed_size=FIXED_SIZE)    
     # Youtube trainset
-    youtube_Trainset = Youtube_MO_Train(DATAROOT, frame_skip=frame_skip, fixed_size=FIXED_SIZE)
-    # Youtube valset
-    youtube_Valset = Youtube_MO_Val(DATAROOT, fixed_size=FIXED_SIZE)
-    # Davis valset
-    davis_Valset = DAVIS_MO_Val(DATAROOT, fixed_size=FIXED_SIZE)
-    
+    youtube_Trainset = Youtube_MO_Train(data_root=cfg.DATA_YOUTUBE, frame_skip=frame_skip, fixed_size=FIXED_SIZE)    
     #concat DAVIS + Youtube
-    trainset = data.ConcatDataset([davis_Trainset]+[youtube_Trainset])
-    #print('trainset instanciado, lenght: ', len(trainset))
-    
+    trainset = data.ConcatDataset(5*[davis_Trainset]+[youtube_Trainset])    
     #train data loader
-    trainloader = data.DataLoader(trainset, batch_size=1, shuffle=True, num_workers=2)
-    #print('trainloader instanciado, lenght: ', len(trainloader))
-    ##########
+    trainloader = data.DataLoader(trainset, batch_size=1, shuffle=True, num_workers=0)
     
+    print('trainloader lenght: ', len(trainloader))
+    
+    # # VALIDATION
+    # # Davis valset
+    # davis_Valset = DAVIS_MO_Val(data_root=cfg.DATA_DAVIS, fixed_size=FIXED_SIZE)    
+    # # Youtube valset
+    # youtube_Valset = Youtube_MO_Val(data_root=cfg.DATA_YOUTUBE, fixed_size=FIXED_SIZE)    
+    # #concat DAVIS + Youtube
+    # valset = data.ConcatDataset(5*[davis_Valset]+[youtube_Valset])    
+    # #train data loader
+    # valloader = data.DataLoader(valset, batch_size=1, shuffle=True, num_workers=0)
+    
+    # print('valloader lenght: ', len(valloader))
+    
+    # input('Press Enter button to continue...')
+    
+    # trainloader lenght:  91777
+    # valloader lenght:  27607
+    ##########
+    t0= time.process_time()
     dataiter = iter(trainloader)
     
     validos = 0
     invalidos = 0
-    for cc in range(10):
+    for cc in range(200):
         
-        #print('Sample: {}/100'.format(cc))
+        _, _, _, info = dataiter.next()
         
-        image, mask, n_obj, info = dataiter.next()
-        #_,_,_, info = dataiter.next()
+        t1 = time.process_time() - t0
+        print("{}) = {}, Time: {:.3f}".format(cc, info['valid_samples'], t1)) # CPU seconds elapsed (floating point)
+        t0 = t1
+        
+        if info['valid_samples']:
+            validos +=1
+        else:
+            invalidos +=1
+    
+    print('boas {}, ruins {}'.format(validos, invalidos))
         
     
-        N_frames = image[0].permute(1, 2, 3, 0)
-        N_masks = mask[0].permute(1, 2, 3, 0)
-        num_objects = n_obj[0].item()
+        #N_frames = image[0].permute(1, 2, 3, 0)
+        #N_masks = mask[0].permute(1, 2, 3, 0)
+        #num_objects = n_obj[0].item()
             
         #print('N_frames: {}, {}'.format(N_frames.shape, N_frames.dtype))    
         #print('N_masks: {}, {}'.format(N_masks.shape, N_masks.dtype))    
-        print('num_objects: {}'.format(num_objects))
+        #print('num_objects: {}'.format(num_objects))
         # N_frames: torch.Size([1, 3, 3, 384, 384]), torch.float32
         # N_masks: torch.Size([1, 11, 3, 384, 384]), torch.int32
         # num_objects: tensor([[1]]), torch.int64
@@ -680,16 +688,16 @@ if __name__ == '__main__':
         #     input("Press Enter to continue...") 
         
         # VALIDATION
-        for hh in range(1):
-            print('Mask CH: ', hh)
-            ff = plt.figure()
-            ff.add_subplot(1,2,1)
-            plt.imshow(N_frames[0])
-            ff.add_subplot(1,2,2)
-            plt.imshow(N_masks[0,:,:,hh])
-            plt.show(block=True) 
+        # for hh in range(1):
+        #     print('Mask CH: ', hh)
+        #     ff = plt.figure()
+        #     ff.add_subplot(1,2,1)
+        #     plt.imshow(N_frames[0])
+        #     ff.add_subplot(1,2,2)
+        #     plt.imshow(N_masks[0,:,:,hh])
+        #     plt.show(block=True) 
             
-            input("Press Enter to continue...") 
+        #     input("Press Enter to continue...") 
     
     
     

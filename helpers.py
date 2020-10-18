@@ -1,23 +1,9 @@
 from __future__ import division
-#torch
+
 import torch
-from torch.autograd import Variable
-from torch.utils import data
-
-import torch.nn as nn
 import torch.nn.functional as F
-import torch.nn.init as init
-import torch.utils.model_zoo as model_zoo
-from torchvision import models
-
-# general libs
-import cv2
-import matplotlib.pyplot as plt
-from PIL import Image
 import numpy as np
-import time
-import os
-import copy
+
 
 
 class font:
@@ -106,7 +92,8 @@ def iou(Es, Ms):
             agg = pred + gt
             i = float(np.sum(agg == 2))
             u = float(np.sum(agg > 0))
-            mean_iou += i/u              
+            if u > 0.0:
+                mean_iou += i/u              
     
     return mean_iou/(batch_size*num_frames)
 

@@ -6,6 +6,7 @@ Created on Fri Jan 24 11:37:55 2020
 """
 from config import cfg
 import torch
+import numpy as np
 import sys
 import argparse
 import os
@@ -22,84 +23,86 @@ import time
 from dataset import DAVIS_MO_Train, DAVIS_MO_Val, Youtube_MO_Train, Youtube_MO_Val
 from dataset_pretrain import VOC_dataset, ECSSD_dataset, MSRA_dataset, SBD_dataset, COCO_dataset
 from model import STM
-from helpers import *
+from helpers import font, iou
 
 # Constants
 MODEL_DIR = 'saved_models'
 os.makedirs(MODEL_DIR, exist_ok=True)
-NUM_EPOCHS = 60
 
 
 def get_arguments():
     """
     Parse input arguments
     """
-    parser = argparse.ArgumentParser(description="SST")
-    #vizualize partials
-    parser.add_argument("-viz", help="Save visualization", action="store_true")    
+    parser = argparse.ArgumentParser(description="SST")    
     # resume trained model
     parser.add_argument('--loadepoch', dest='loadepoch', help='epoch to load model',
                       default=-1, type=int)
     parser.add_argument('--output_dir', dest='output_dir',
                       help='output directory',
                       default=MODEL_DIR, type=str)
-    # configs
-    parser.add_argument('--epochs', dest='num_epochs',
-                      help='number of epochs to train',
-                      default=NUM_EPOCHS, type=int)
-    parser.add_argument('--lr', dest='lr',
-                      help='starting learning rate',
-                      default=1e-5, type=float)
-    parser.add_argument('--eval_epoch', dest='eval_epoch',
-                      help='interval of epochs to perform validation',
-                      default=10, type=int)
+
     return parser.parse_args()
 
-def get_dataloader(data_root, batch_size, frame_skip, datasets, phase='main_train'):    
+def get_dataloader(phase, batch_size, frame_skip):    
     if phase == 'main_train':
         datasets = cfg.MAIN_TRAIN_DATASETS
         trainset = []
         if 'davis' in datasets:   
-            trainset += datasets['davis'] * [DAVIS_MO_Train(data_root=data_root, frame_skip=frame_skip)]            
+            trainset += datasets['davis'] * [DAVIS_MO_Train(data_root=cfg.DATA_DAVIS, fixed_size=cfg.TRAIN_IMG_SIZE, frame_skip=frame_skip)]            
         if 'youtube' in datasets:
-            trainset += datasets['youtube'] * [Youtube_MO_Train(data_root=data_root, frame_skip=frame_skip)]
+            trainset += datasets['youtube'] * [Youtube_MO_Train(data_root=cfg.DATA_YOUTUBE, fixed_size=cfg.TRAIN_IMG_SIZE, frame_skip=frame_skip)]
         return data.DataLoader(data.ConcatDataset(trainset), batch_size=batch_size, shuffle=True, num_workers=2)
         
-    elif phase == 'validation':
-        datasets = cfg.VAL_DATASETS
+    elif phase == 'main_val':
+        datasets = cfg.MAIN_VAL_DATASETS
         valset = []
         if 'davis' in datasets:   
-            valset += datasets['davis'] * [DAVIS_MO_Val(data_root=data_root)]            
+            valset += datasets['davis'] * [DAVIS_MO_Val(data_root=cfg.DATA_DAVIS, fixed_size=cfg.VAL_IMG_SIZE)]            
         if 'youtube' in datasets:
-            valset += datasets['youtube'] * [Youtube_MO_Val(data_root=data_root)]
+            valset += datasets['youtube'] * [Youtube_MO_Val(data_root=cfg.DATA_YOUTUBE, fixed_size=cfg.VAL_IMG_SIZE)]
         return data.DataLoader(data.ConcatDataset(valset), batch_size=batch_size, shuffle=False, num_workers=2)
     
     elif phase == 'pre_train':
         datasets = cfg.PRE_TRAIN_DATASETS
         pretrainset = []
         if 'voc' in datasets:
-            pretrainset += datasets['voc'] * [VOC_dataset(data_root=data_root)]
+            pretrainset += datasets['voc'] * [VOC_dataset(data_root=cfg.DATA_VOC, fixed_size=cfg.TRAIN_IMG_SIZE, imset='train')]
         if 'ecssd' in datasets:
-            pretrainset += datasets['ecssd'] * [ECSSD_dataset(data_root=data_root)]
+            pretrainset += datasets['ecssd'] * [ECSSD_dataset(data_root=cfg.DATA_ECSSD, fixed_size=cfg.TRAIN_IMG_SIZE, imset='train')]
         if 'msra' in datasets:
-            pretrainset += datasets['msra'] * [MSRA_dataset(data_root=data_root)]
+            pretrainset += datasets['msra'] * [MSRA_dataset(data_root=cfg.DATA_MSRA, fixed_size=cfg.TRAIN_IMG_SIZE, imset='train')]
         if 'sbd' in datasets:
-            pretrainset += datasets['sbd'] * [SBD_dataset(data_root=data_root)]
+            pretrainset += datasets['sbd'] * [SBD_dataset(data_root=cfg.DATA_SBD, fixed_size=cfg.TRAIN_IMG_SIZE, imset='train')]
         if 'coco' in datasets:
-            pretrainset += datasets['coco'] * [COCO_dataset(data_root=data_root)]        
+            pretrainset += datasets['coco'] * [COCO_dataset(data_root=cfg.DATA_COCO, fixed_size=cfg.TRAIN_IMG_SIZE, imset='train')]        
         return data.DataLoader(data.ConcatDataset(pretrainset), batch_size=batch_size, shuffle=True, num_workers=2)
+    
+    elif phase == 'pre_val':
+        datasets = cfg.PRE_VAL_DATASETS
+        prevalset = []
+        if 'voc' in datasets:
+            prevalset += datasets['voc'] * [VOC_dataset(data_root=cfg.DATA_VOC, fixed_size=cfg.VAL_IMG_SIZE, imset='val')]
+        if 'ecssd' in datasets:
+            prevalset += datasets['ecssd'] * [ECSSD_dataset(data_root=cfg.DATA_ECSSD, fixed_size=cfg.VAL_IMG_SIZE, imset='val')]
+        if 'msra' in datasets:
+            prevalset += datasets['msra'] * [MSRA_dataset(data_root=cfg.DATA_MSRA, fixed_size=cfg.VAL_IMG_SIZE, imset='val')]
+        if 'sbd' in datasets:
+            prevalset += datasets['sbd'] * [SBD_dataset(data_root=cfg.DATA_SBD, fixed_size=cfg.VAL_IMG_SIZE, imset='val')]
+        if 'coco' in datasets:
+            prevalset += datasets['coco'] * [COCO_dataset(data_root=cfg.DATA_COCO, fixed_size=cfg.VAL_IMG_SIZE, imset='val')]        
+        return data.DataLoader(data.ConcatDataset(prevalset), batch_size=batch_size, shuffle=True, num_workers=2)
 
-def run_train():    
+def run_train(train_phase='main_train', val_phase=None):    
     # get arguments
     args = get_arguments()
-    #VIZ = args.viz
-    DATA_ROOT = cfg.DATA_ROOT
-    datasets= cfg.MAIN_TRAIN_DATASETS
     
-    # Model and version
-    MODEL = 'STM'
-    print(MODEL, ': Using Dataset', datasets)    
-    print('--- CUDA:')
+    if train_phase == 'main_train': 
+        datasets= cfg.MAIN_TRAIN_DATASETS
+        num_epochs = cfg.MAIN_TRAIN_EPOCHS
+    else:
+        datasets= cfg.PRE_TRAIN_DATASETS
+        num_epochs = cfg.PRE_TRAIN_EPOCHS
     
     # Device infos
     if torch.cuda.is_available():
@@ -116,18 +119,19 @@ def run_train():
     
     # dataloader parameters
     train_batch_size = num_devices
-    val_batch_size = 12
+    val_batch_size = 1
     frame_skip = 5
     
     # Isntantiate the model
     model = STM()
-    print("Model instantiated")    
+    print("STM model instantiated")    
     if torch.cuda.is_available():
         model = model.to(device)
         print("Model sent to cuda")
         if num_devices > 1:
             model = nn.DataParallel(model)
             print("Model parallelised in {} GPUs".format(num_devices))
+    print('Using Datasets: ', datasets)
     
     # parameters, optmizer and loss
     params = []
@@ -135,8 +139,7 @@ def run_train():
         if value.requires_grad:
             params += [{'params':[value]}]
     
-    optimizer = torch.optim.Adam(params, lr=args.lr)
-    #criterion = torch.nn.BCELoss() #replaced by functional cross entropy
+    optimizer = torch.optim.Adam(params, lr=cfg.LR)
     criterion = F.cross_entropy
     
     writer = SummaryWriter()
@@ -169,37 +172,41 @@ def run_train():
         print('  - complete!')       
     
     # instantiate dataloaders
-    Trainloader = get_dataloader(DATA_ROOT, train_batch_size, 
-                                 frame_skip, datasets=datasets, phase='main_train')
-    Valloader = get_dataloader(DATA_ROOT, val_batch_size, 
-                               frame_skip, datasets=datasets, phase='validation')
-    iters_per_epoch = len(Trainloader)
+    trainloader = get_dataloader(phase=train_phase, batch_size=train_batch_size, frame_skip=frame_skip)
+    valloader = get_dataloader(phase=val_phase, batch_size=val_batch_size, frame_skip=0)
+    iters_per_epoch = len(trainloader)
+    print('len trainloader: ', iters_per_epoch)
+    print('len valoader: ', len(valloader))
     
     # loop for training and validation
-    for epoch in range(start_epoch, args.num_epochs):                
+    for epoch in range(start_epoch, num_epochs):                
         
         # training
-        print('[Train] Epoch {}{}{}'.format(font.BOLD, epoch+1, font.END))
+        print('[Train] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
          
         # increases maximum frame skip by 5 (range 5->25) after 20 epochs
-        if (epoch > 0) and (epoch % 20 == 0):
-            frame_skip = min([frame_skip+5, 25])
+        if (epoch > 0) and (epoch % 20 == 0) and (train_phase == 'main_train'):
+            frame_skip = min([frame_skip+5, 25])  
             
-            #instantiate datasets and dataloader again with updated frame skip
-            Trainloader = get_dataloader(DATA_ROOT, train_batch_size, 
-                                         frame_skip, datasets=datasets, phase='main_train')
+            # Update dataloader with new frame skip
+            trainloader = get_dataloader(phase=train_phase, batch_size=train_batch_size, frame_skip=frame_skip)
         
         model.eval() #set eval mode to disable batchnorm and dropout
         running_loss = 0.0
         mean_iou = 0.0
           
-        for seq, V in enumerate(Trainloader):
+        for seq, V in enumerate(trainloader):
             
             ############# interrupção só para testar
-            if seq > 0:
+            if seq > 5:
                 break
             
             Fs, Ms, num_objects, info = V
+            
+            if not info['valid_samples']:
+                print('[TRAIN] sample idx: %d skiped' % (seq+1))
+                continue
+            
             Es = torch.zeros_like(Ms)
             #batch_size = 4:
             #Fs:  torch.Size([4, 3, 3, 384, 384])
@@ -216,6 +223,7 @@ def run_train():
             
             loss = 0.0            
             Es[:,:,0] = Ms[:,:,0]
+            keys, values = torch.Tensor([]), torch.Tensor([])
         
             #loop over the 3-1 frame+annotation samples (1st frame is used as reference)
             for t in range(1,3):
@@ -263,7 +271,7 @@ def run_train():
             
             # logging and display
             #if (seq+1) % args.disp_interval == 0:
-            if (seq+1) % 10 == 0:                
+            if (seq+1) % cfg.DISP_INTERVAL == 0:                
                 writer.add_scalar('Train/LOSS', running_loss/10, seq + epoch * iters_per_epoch)
                 writer.add_scalar('Train/IOU', mean_iou/10, seq + epoch * iters_per_epoch)
                 print('[TRAIN] idx: %d, loss: %.3f, iou: %.3f' % (seq+1, running_loss/10, mean_iou/10))
@@ -271,31 +279,29 @@ def run_train():
                 mean_iou = 0.0                   
             
         # saving checkpoint    
-        if epoch % 10 == 0 and epoch > 0:
+        if epoch % cfg.CHECKPOINT_EPOCHS == 0 and epoch > 0:
             save_name = '{}/{}.pth'.format(MODEL_DIR, epoch)
             torch.save({'epoch': epoch, 'frame_skip': frame_skip,'model': model.state_dict(),
                         'optimizer': optimizer.state_dict(),}, save_name)
             print('Model saved in: {}'.format(save_name))
             
         # validation
-        if epoch % args.eval_epoch == 0:
+        if (val_phase is not None) and (epoch % cfg.EVAL_EPOCHS == 0) and (epoch > 0):
             with torch.no_grad():
-                print('[Val] Epoch {}{}{}'.format(font.BOLD, epoch+1, font.END))
+                print('[Val] Epoch {}{}{}'.format(font.BOLD, epoch, font.END))
                 model.eval()
-                run_validate(model, criterion, Valloader, device, Mem_every=5, Mem_number=None)
-                print('  - complete!')     
-        
-        print("The End")    
+                run_validate(model, criterion, valloader, device, mem_every=5, mem_number=None)        
+    
 
-def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number=None):
+def run_validate(model, criterion, valloader, device, mem_every=None, mem_number=None):
         
     idx = 0
     next_change = 0
     
-    for seq, V in enumerate(Valloader):
+    for seq, V in enumerate(valloader):
                     
         ############# interrupção só para testar
-        if seq > 0:
+        if seq > 5:
             break
         
         Fss, Mss, nums_objects, infos = V
@@ -315,7 +321,7 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
         Es = torch.zeros(Mss[0,:,0].shape).unsqueeze(dim=0).to(device)
         #Es: torch.Size([1, 11, 384, 384])
                 
-        for batch_idx in range(batch_size):                
+        for batch_idx in range(batch_size):      
             
             Fs = Fss[batch_idx,:,0].unsqueeze(dim=0)
             Ms = Mss[batch_idx,:,0].unsqueeze(dim=0)
@@ -327,14 +333,15 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
             # New sequence begins (fist frame)
             if idx == next_change:
                 next_change += num_frames
-                if Mem_every:
-                    to_memorize = [int(i) for i in np.arange(idx, next_change, step=Mem_every)]
-                elif Mem_number:
-                    to_memorize = [int(round(i)) for i in np.linspace(idx, next_change, num=Mem_number+2)[:-1]]
+                if mem_every:
+                    to_memorize = [int(i) for i in np.arange(idx, next_change, step=mem_every)]
+                elif mem_number:
+                    to_memorize = [int(round(i)) for i in np.linspace(idx, next_change, num=mem_number+2)[:-1]]
                 else:
                     raise NotImplementedError
                 #If mem_every = 5, then to_memorize = [0, 5, 10, 15...]
                 
+                keys, values = torch.Tensor([]), torch.Tensor([])
                 Es = Ms
                 loss = 0.0       
                 mean_iou = 0.0
@@ -382,14 +389,14 @@ def run_validate(model, criterion, Valloader, device, Mem_every=None, Mem_number
                 
             idx += 1              
 
-
         
 if __name__ == "__main__":    
     
     print(">>>>\nMy STM starting...")    
     print('Python version: ', sys.version)   
     print('Pytorch version: ', torch.__version__)    
-    run_train()
+    run_train(train_phase='main_train', val_phase='main_val')
+    #run_train(train_phase='pre_train', val_phase='pre_val')
     
     
     
